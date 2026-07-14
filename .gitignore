@@ -1,0 +1,28 @@
+# Maven
+target/
+*.class
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.settings/
+.classpath
+.project
+bin/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+
+# MCP config (contains local secrets/tokens)
+.mcp.json
+
+# Claude Code local settings
+.claude/settings.local.json

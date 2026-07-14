@@ -1,0 +1,17 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+  cloud:
+    gateway:
+      routes: []
+      # Phase 1: add routes to user-service, product-service, inventory-service,
+      # order-service, payment-service, notification-service as they come online.
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,gateway

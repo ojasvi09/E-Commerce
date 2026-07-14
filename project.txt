@@ -1,0 +1,243 @@
+# Project: Event-Driven E-Commerce Platform
+
+## Goal
+
+Build a production-style Event-Driven E-Commerce Platform to learn **Microservices** and **Apache Kafka** by implementing real-world architecture patterns step by step.
+
+## Tech Stack
+
+* Java 21
+* Spring Boot
+* Spring Data JPA
+* Spring Security
+* Spring Cloud Gateway
+* OpenFeign / WebClient
+* Apache Kafka
+* PostgreSQL
+* Redis
+* Docker & Docker Compose
+* JUnit 5, Mockito, Testcontainers
+
+---
+
+# Phase 1 – Core Microservices
+
+Create independent Spring Boot services, each with its own PostgreSQL database:
+
+* API Gateway
+* User Service
+* Product Service
+* Inventory Service
+* Order Service
+* Payment Service
+* Notification Service
+
+Learn:
+
+* Microservice architecture
+* Database per service
+* REST APIs
+* DTOs & Validation
+* Exception handling
+* Dockerizing services
+
+---
+
+# Phase 2 – Synchronous Communication
+
+Implement service-to-service communication using OpenFeign or WebClient.
+
+Flow:
+
+Order → Inventory → Payment
+
+Add:
+
+* Timeouts
+* Retry
+* Circuit Breaker (Resilience4j)
+
+Learn:
+
+* Synchronous communication
+* Failure handling
+* Service resilience
+
+---
+
+# Phase 3 – Kafka Integration
+
+Replace synchronous business communication with Kafka events.
+
+Example flow:
+
+Order Created
+→ Inventory Reserved
+→ Payment Successful
+→ Notification Sent
+
+Implement:
+
+* Producers
+* Consumers
+* Topics
+* Partitions
+* Consumer Groups
+* Offsets
+* JSON Serialization
+
+Learn:
+
+* Event-Driven Architecture
+* Asynchronous communication
+
+---
+
+# Phase 4 – Event-Driven Workflow
+
+Create domain events such as:
+
+* OrderCreated
+* InventoryReserved
+* InventoryFailed
+* PaymentSuccessful
+* PaymentFailed
+* OrderCancelled
+* ShipmentCreated
+* NotificationRequested
+* RefundInitiated
+
+Services should communicate primarily through Kafka.
+
+---
+
+# Phase 5 – Saga Pattern
+
+Implement distributed transaction management.
+
+Example:
+
+Order Created
+→ Reserve Inventory
+→ Process Payment
+→ Create Shipment
+
+If payment fails:
+
+* Release Inventory
+* Cancel Order
+
+Implement:
+
+* Saga Choreography
+* (Optional) Saga Orchestration
+
+---
+
+# Phase 6 – Transactional Outbox
+
+Ensure database updates and Kafka publishing remain consistent.
+
+Implement:
+
+* Transactional Outbox Pattern
+* (Optional) Debezium CDC
+
+---
+
+# Phase 7 – Retry & Dead Letter Queue
+
+Handle processing failures gracefully.
+
+Implement:
+
+* Retry
+* Exponential Backoff
+* Dead Letter Queue (DLQ)
+
+---
+
+# Phase 8 – Idempotency
+
+Prevent duplicate event processing.
+
+Implement:
+
+* Processed Events table
+* Idempotent Consumers
+
+---
+
+# Phase 9 – Ordering & Scaling
+
+Ensure event ordering using message keys (e.g., OrderId).
+
+Run multiple consumer instances and observe:
+
+* Consumer Groups
+* Partition Assignment
+* Rebalancing
+
+---
+
+# Phase 10 – Security
+
+Implement:
+
+* JWT Authentication
+* Role-Based Authorization
+* API Gateway Authentication
+
+---
+
+# Phase 11 – Docker
+
+Containerize:
+
+* All microservices
+* Kafka
+* PostgreSQL
+* Redis
+
+Run the complete system using Docker Compose.
+
+---
+
+# Expected Learning Outcomes
+
+### Microservices
+
+* Service decomposition
+* API Gateway
+* Database per service
+* REST communication
+* OpenFeign/WebClient
+* Resilience4j
+* Event-Driven Architecture
+* Distributed Transactions
+* Security
+* Docker
+
+### Apache Kafka
+
+* Producers & Consumers
+* Topics & Partitions
+* Consumer Groups
+* Offsets
+* Ordering
+* Retry
+* Dead Letter Queue
+* Idempotency
+* Saga Pattern
+* Transactional Outbox
+* Exactly Once Semantics (conceptual)
+
+---
+
+## Development Principles
+
+* Build one phase at a time.
+* Keep services loosely coupled.
+* Write unit and integration tests.
+* Use Git commits after every completed milestone.
+* Focus on understanding why each pattern is used, not just how to implement it.
