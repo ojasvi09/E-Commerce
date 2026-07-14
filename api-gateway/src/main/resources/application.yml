@@ -6,9 +6,31 @@ spring:
     name: api-gateway
   cloud:
     gateway:
-      routes: []
-      # Phase 1: add routes to user-service, product-service, inventory-service,
-      # order-service, payment-service, notification-service as they come online.
+      routes:
+        - id: user-service
+          uri: http://localhost:8081
+          predicates:
+            - Path=/api/users/**
+        - id: product-service
+          uri: http://localhost:8082
+          predicates:
+            - Path=/api/products/**
+        - id: inventory-service
+          uri: http://localhost:8083
+          predicates:
+            - Path=/api/inventory/**
+        - id: order-service
+          uri: http://localhost:8084
+          predicates:
+            - Path=/api/orders/**
+        - id: payment-service
+          uri: http://localhost:8085
+          predicates:
+            - Path=/api/payments/**
+        - id: notification-service
+          uri: http://localhost:8086
+          predicates:
+            - Path=/api/notifications/**
 
 management:
   endpoints:
