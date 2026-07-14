@@ -2,6 +2,8 @@ package com.ecommerce.inventory.exception;
 
 import java.time.Instant;
 import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -11,6 +13,8 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
+    private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
     @ExceptionHandler(InventoryNotFoundException.class)
     public ResponseEntity<ApiError> handleNotFound(InventoryNotFoundException ex) {
         return build(HttpStatus.NOT_FOUND, ex.getMessage(), List.of());
@@ -18,6 +22,16 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(InventoryAlreadyExistsException.class)
     public ResponseEntity<ApiError> handleConflict(InventoryAlreadyExistsException ex) {
+        return build(HttpStatus.CONFLICT, ex.getMessage(), List.of());
+    }
+
+    @ExceptionHandler(InventoryNotFoundForProductException.class)
+    public ResponseEntity<ApiError> handleNotFoundForProduct(InventoryNotFoundForProductException ex) {
+        return build(HttpStatus.NOT_FOUND, ex.getMessage(), List.of());
+    }
+
+    @ExceptionHandler(InsufficientStockException.class)
+    public ResponseEntity<ApiError> handleInsufficientStock(InsufficientStockException ex) {
         return build(HttpStatus.CONFLICT, ex.getMessage(), List.of());
     }
 
@@ -31,6 +45,7 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiError> handleGeneric(Exception ex) {
+        log.error("Unexpected error occurred", ex);
         return build(HttpStatus.INTERNAL_SERVER_ERROR, "Unexpected error occurred", List.of());
     }
 
