@@ -1,0 +1,85 @@
+{
+  "info": {
+    "name": "Inventory Service",
+    "description": "CRUD + stock reserve/release requests for inventory-service (Phase 1 CRUD, Phase 2 reserve/release). Set base_url to the gateway (http://localhost:8080) if you want to go through the API Gateway instead of hitting the service directly.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:8083" },
+    { "key": "inventory_id", "value": "1" },
+    { "key": "product_id", "value": "1" }
+  ],
+  "item": [
+    {
+      "name": "Create Inventory Record",
+      "request": {
+        "method": "POST",
+        "header": [ { "key": "Content-Type", "value": "application/json" } ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"productId\": 1,\n  \"quantity\": 100\n}"
+        },
+        "url": { "raw": "{{base_url}}/api/inventory", "host": [ "{{base_url}}" ], "path": [ "api", "inventory" ] }
+      }
+    },
+    {
+      "name": "Get All Inventory Records",
+      "request": {
+        "method": "GET",
+        "url": { "raw": "{{base_url}}/api/inventory", "host": [ "{{base_url}}" ], "path": [ "api", "inventory" ] }
+      }
+    },
+    {
+      "name": "Get Inventory Record By Id",
+      "request": {
+        "method": "GET",
+        "url": { "raw": "{{base_url}}/api/inventory/{{inventory_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "inventory", "{{inventory_id}}" ] }
+      }
+    },
+    {
+      "name": "Update Inventory Record",
+      "request": {
+        "method": "PUT",
+        "header": [ { "key": "Content-Type", "value": "application/json" } ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"productId\": 1,\n  \"quantity\": 85\n}"
+        },
+        "url": { "raw": "{{base_url}}/api/inventory/{{inventory_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "inventory", "{{inventory_id}}" ] }
+      }
+    },
+    {
+      "name": "Delete Inventory Record",
+      "request": {
+        "method": "DELETE",
+        "url": { "raw": "{{base_url}}/api/inventory/{{inventory_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "inventory", "{{inventory_id}}" ] }
+      }
+    },
+    {
+      "name": "Reserve Stock (Phase 2)",
+      "request": {
+        "method": "POST",
+        "header": [ { "key": "Content-Type", "value": "application/json" } ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"productId\": {{product_id}},\n  \"quantity\": 1\n}"
+        },
+        "url": { "raw": "{{base_url}}/api/inventory/reserve", "host": [ "{{base_url}}" ], "path": [ "api", "inventory", "reserve" ] },
+        "description": "Decrements stock. Returns 409 if requested quantity exceeds available stock, 404 if no inventory record exists for productId. Called by order-service when placing an order."
+      }
+    },
+    {
+      "name": "Release Stock (Phase 2)",
+      "request": {
+        "method": "POST",
+        "header": [ { "key": "Content-Type", "value": "application/json" } ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"productId\": {{product_id}},\n  \"quantity\": 1\n}"
+        },
+        "url": { "raw": "{{base_url}}/api/inventory/release", "host": [ "{{base_url}}" ], "path": [ "api", "inventory", "release" ] },
+        "description": "Increments stock back. Compensating action used by order-service to roll back a reservation when a later step (e.g. payment) fails."
+      }
+    }
+  ]
+}

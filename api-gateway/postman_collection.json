@@ -1,0 +1,228 @@
+{
+  "info": {
+    "name": "API Gateway (all services)",
+    "description": "Same CRUD requests as the per-service collections, but routed through the API Gateway on port 8080 instead of hitting each service directly. Useful for verifying the gateway's routing table end to end.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:8080" },
+    { "key": "user_id", "value": "1" },
+    { "key": "product_id", "value": "1" },
+    { "key": "inventory_id", "value": "1" },
+    { "key": "order_id", "value": "1" },
+    { "key": "payment_id", "value": "1" },
+    { "key": "notification_id", "value": "1" }
+  ],
+  "item": [
+    {
+      "name": "Users",
+      "item": [
+        {
+          "name": "Create User",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Jane Doe\",\n  \"email\": \"jane.doe@example.com\",\n  \"password\": \"password123\"\n}" },
+            "url": { "raw": "{{base_url}}/api/users", "host": [ "{{base_url}}" ], "path": [ "api", "users" ] }
+          }
+        },
+        {
+          "name": "Get All Users",
+          "request": { "method": "GET", "url": { "raw": "{{base_url}}/api/users", "host": [ "{{base_url}}" ], "path": [ "api", "users" ] } }
+        },
+        {
+          "name": "Get User By Id",
+          "request": { "method": "GET", "url": { "raw": "{{base_url}}/api/users/{{user_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "users", "{{user_id}}" ] } }
+        },
+        {
+          "name": "Update User",
+          "request": {
+            "method": "PUT",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Jane A. Doe\",\n  \"email\": \"jane.doe@example.com\",\n  \"password\": \"newpassword123\"\n}" },
+            "url": { "raw": "{{base_url}}/api/users/{{user_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "users", "{{user_id}}" ] }
+          }
+        },
+        {
+          "name": "Delete User",
+          "request": { "method": "DELETE", "url": { "raw": "{{base_url}}/api/users/{{user_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "users", "{{user_id}}" ] } }
+        }
+      ]
+    },
+    {
+      "name": "Products",
+      "item": [
+        {
+          "name": "Create Product",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Wireless Mouse\",\n  \"description\": \"Ergonomic wireless mouse\",\n  \"price\": 19.99,\n  \"sku\": \"WM-1001\"\n}" },
+            "url": { "raw": "{{base_url}}/api/products", "host": [ "{{base_url}}" ], "path": [ "api", "products" ] }
+          }
+        },
+        {
+          "name": "Get All Products",
+          "request": { "method": "GET", "url": { "raw": "{{base_url}}/api/products", "host": [ "{{base_url}}" ], "path": [ "api", "products" ] } }
+        },
+        {
+          "name": "Get Product By Id",
+          "request": { "method": "GET", "url": { "raw": "{{base_url}}/api/products/{{product_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "products", "{{product_id}}" ] } }
+        },
+        {
+          "name": "Update Product",
+          "request": {
+            "method": "PUT",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Wireless Mouse Pro\",\n  \"description\": \"Ergonomic wireless mouse with USB-C\",\n  \"price\": 24.99,\n  \"sku\": \"WM-1001\"\n}" },
+            "url": { "raw": "{{base_url}}/api/products/{{product_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "products", "{{product_id}}" ] }
+          }
+        },
+        {
+          "name": "Delete Product",
+          "request": { "method": "DELETE", "url": { "raw": "{{base_url}}/api/products/{{product_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "products", "{{product_id}}" ] } }
+        }
+      ]
+    },
+    {
+      "name": "Inventory",
+      "item": [
+        {
+          "name": "Create Inventory Record",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"productId\": 1,\n  \"quantity\": 100\n}" },
+            "url": { "raw": "{{base_url}}/api/inventory", "host": [ "{{base_url}}" ], "path": [ "api", "inventory" ] }
+          }
+        },
+        {
+          "name": "Get All Inventory Records",
+          "request": { "method": "GET", "url": { "raw": "{{base_url}}/api/inventory", "host": [ "{{base_url}}" ], "path": [ "api", "inventory" ] } }
+        },
+        {
+          "name": "Get Inventory Record By Id",
+          "request": { "method": "GET", "url": { "raw": "{{base_url}}/api/inventory/{{inventory_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "inventory", "{{inventory_id}}" ] } }
+        },
+        {
+          "name": "Update Inventory Record",
+          "request": {
+            "method": "PUT",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"productId\": 1,\n  \"quantity\": 85\n}" },
+            "url": { "raw": "{{base_url}}/api/inventory/{{inventory_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "inventory", "{{inventory_id}}" ] }
+          }
+        },
+        {
+          "name": "Delete Inventory Record",
+          "request": { "method": "DELETE", "url": { "raw": "{{base_url}}/api/inventory/{{inventory_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "inventory", "{{inventory_id}}" ] } }
+        }
+      ]
+    },
+    {
+      "name": "Orders",
+      "item": [
+        {
+          "name": "Create Order",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"userId\": 1,\n  \"items\": [\n    { \"productId\": 1, \"quantity\": 2, \"price\": 19.99 },\n    { \"productId\": 2, \"quantity\": 1, \"price\": 49.50 }\n  ]\n}" },
+            "url": { "raw": "{{base_url}}/api/orders", "host": [ "{{base_url}}" ], "path": [ "api", "orders" ] }
+          }
+        },
+        {
+          "name": "Get All Orders",
+          "request": { "method": "GET", "url": { "raw": "{{base_url}}/api/orders", "host": [ "{{base_url}}" ], "path": [ "api", "orders" ] } }
+        },
+        {
+          "name": "Get Order By Id",
+          "request": { "method": "GET", "url": { "raw": "{{base_url}}/api/orders/{{order_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "orders", "{{order_id}}" ] } }
+        },
+        {
+          "name": "Update Order",
+          "request": {
+            "method": "PUT",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"userId\": 1,\n  \"items\": [\n    { \"productId\": 1, \"quantity\": 3, \"price\": 19.99 }\n  ]\n}" },
+            "url": { "raw": "{{base_url}}/api/orders/{{order_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "orders", "{{order_id}}" ] }
+          }
+        },
+        {
+          "name": "Delete Order",
+          "request": { "method": "DELETE", "url": { "raw": "{{base_url}}/api/orders/{{order_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "orders", "{{order_id}}" ] } }
+        }
+      ]
+    },
+    {
+      "name": "Payments",
+      "item": [
+        {
+          "name": "Create Payment",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"orderId\": 1,\n  \"amount\": 89.48,\n  \"status\": \"PENDING\"\n}" },
+            "url": { "raw": "{{base_url}}/api/payments", "host": [ "{{base_url}}" ], "path": [ "api", "payments" ] }
+          }
+        },
+        {
+          "name": "Get All Payments",
+          "request": { "method": "GET", "url": { "raw": "{{base_url}}/api/payments", "host": [ "{{base_url}}" ], "path": [ "api", "payments" ] } }
+        },
+        {
+          "name": "Get Payment By Id",
+          "request": { "method": "GET", "url": { "raw": "{{base_url}}/api/payments/{{payment_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "payments", "{{payment_id}}" ] } }
+        },
+        {
+          "name": "Update Payment",
+          "request": {
+            "method": "PUT",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"orderId\": 1,\n  \"amount\": 89.48,\n  \"status\": \"SUCCESSFUL\"\n}" },
+            "url": { "raw": "{{base_url}}/api/payments/{{payment_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "payments", "{{payment_id}}" ] }
+          }
+        },
+        {
+          "name": "Delete Payment",
+          "request": { "method": "DELETE", "url": { "raw": "{{base_url}}/api/payments/{{payment_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "payments", "{{payment_id}}" ] } }
+        }
+      ]
+    },
+    {
+      "name": "Notifications",
+      "item": [
+        {
+          "name": "Create Notification",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"userId\": 1,\n  \"message\": \"Your order has been placed successfully.\",\n  \"type\": \"EMAIL\",\n  \"status\": \"PENDING\"\n}" },
+            "url": { "raw": "{{base_url}}/api/notifications", "host": [ "{{base_url}}" ], "path": [ "api", "notifications" ] }
+          }
+        },
+        {
+          "name": "Get All Notifications",
+          "request": { "method": "GET", "url": { "raw": "{{base_url}}/api/notifications", "host": [ "{{base_url}}" ], "path": [ "api", "notifications" ] } }
+        },
+        {
+          "name": "Get Notification By Id",
+          "request": { "method": "GET", "url": { "raw": "{{base_url}}/api/notifications/{{notification_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "notifications", "{{notification_id}}" ] } }
+        },
+        {
+          "name": "Update Notification",
+          "request": {
+            "method": "PUT",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"userId\": 1,\n  \"message\": \"Your order has been shipped.\",\n  \"type\": \"EMAIL\",\n  \"status\": \"SENT\"\n}" },
+            "url": { "raw": "{{base_url}}/api/notifications/{{notification_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "notifications", "{{notification_id}}" ] }
+          }
+        },
+        {
+          "name": "Delete Notification",
+          "request": { "method": "DELETE", "url": { "raw": "{{base_url}}/api/notifications/{{notification_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "notifications", "{{notification_id}}" ] } }
+        }
+      ]
+    }
+  ]
+}

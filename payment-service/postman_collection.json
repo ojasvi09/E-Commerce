@@ -1,0 +1,58 @@
+{
+  "info": {
+    "name": "Payment Service",
+    "description": "CRUD requests for payment-service (Phase 1). Set base_url to the gateway (http://localhost:8080) if you want to go through the API Gateway instead of hitting the service directly.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:8085" },
+    { "key": "payment_id", "value": "1" }
+  ],
+  "item": [
+    {
+      "name": "Create Payment",
+      "request": {
+        "method": "POST",
+        "header": [ { "key": "Content-Type", "value": "application/json" } ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"orderId\": 1,\n  \"amount\": 89.48,\n  \"status\": \"PENDING\"\n}"
+        },
+        "url": { "raw": "{{base_url}}/api/payments", "host": [ "{{base_url}}" ], "path": [ "api", "payments" ] }
+      }
+    },
+    {
+      "name": "Get All Payments",
+      "request": {
+        "method": "GET",
+        "url": { "raw": "{{base_url}}/api/payments", "host": [ "{{base_url}}" ], "path": [ "api", "payments" ] }
+      }
+    },
+    {
+      "name": "Get Payment By Id",
+      "request": {
+        "method": "GET",
+        "url": { "raw": "{{base_url}}/api/payments/{{payment_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "payments", "{{payment_id}}" ] }
+      }
+    },
+    {
+      "name": "Update Payment",
+      "request": {
+        "method": "PUT",
+        "header": [ { "key": "Content-Type", "value": "application/json" } ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"orderId\": 1,\n  \"amount\": 89.48,\n  \"status\": \"SUCCESSFUL\"\n}"
+        },
+        "url": { "raw": "{{base_url}}/api/payments/{{payment_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "payments", "{{payment_id}}" ] }
+      }
+    },
+    {
+      "name": "Delete Payment",
+      "request": {
+        "method": "DELETE",
+        "url": { "raw": "{{base_url}}/api/payments/{{payment_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "payments", "{{payment_id}}" ] }
+      }
+    }
+  ]
+}

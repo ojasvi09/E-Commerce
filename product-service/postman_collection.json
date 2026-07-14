@@ -1,0 +1,58 @@
+{
+  "info": {
+    "name": "Product Service",
+    "description": "CRUD requests for product-service (Phase 1). Set base_url to the gateway (http://localhost:8080) if you want to go through the API Gateway instead of hitting the service directly.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:8082" },
+    { "key": "product_id", "value": "1" }
+  ],
+  "item": [
+    {
+      "name": "Create Product",
+      "request": {
+        "method": "POST",
+        "header": [ { "key": "Content-Type", "value": "application/json" } ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Wireless Mouse\",\n  \"description\": \"Ergonomic wireless mouse\",\n  \"price\": 19.99,\n  \"sku\": \"WM-1001\"\n}"
+        },
+        "url": { "raw": "{{base_url}}/api/products", "host": [ "{{base_url}}" ], "path": [ "api", "products" ] }
+      }
+    },
+    {
+      "name": "Get All Products",
+      "request": {
+        "method": "GET",
+        "url": { "raw": "{{base_url}}/api/products", "host": [ "{{base_url}}" ], "path": [ "api", "products" ] }
+      }
+    },
+    {
+      "name": "Get Product By Id",
+      "request": {
+        "method": "GET",
+        "url": { "raw": "{{base_url}}/api/products/{{product_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "products", "{{product_id}}" ] }
+      }
+    },
+    {
+      "name": "Update Product",
+      "request": {
+        "method": "PUT",
+        "header": [ { "key": "Content-Type", "value": "application/json" } ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Wireless Mouse Pro\",\n  \"description\": \"Ergonomic wireless mouse with USB-C\",\n  \"price\": 24.99,\n  \"sku\": \"WM-1001\"\n}"
+        },
+        "url": { "raw": "{{base_url}}/api/products/{{product_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "products", "{{product_id}}" ] }
+      }
+    },
+    {
+      "name": "Delete Product",
+      "request": {
+        "method": "DELETE",
+        "url": { "raw": "{{base_url}}/api/products/{{product_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "products", "{{product_id}}" ] }
+      }
+    }
+  ]
+}

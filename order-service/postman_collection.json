@@ -1,0 +1,72 @@
+{
+  "info": {
+    "name": "Order Service",
+    "description": "CRUD requests for order-service. As of Phase 2, Create Order synchronously reserves stock in inventory-service and charges payment-service before responding — check the 'status' field in the response ('CONFIRMED' vs 'CANCELLED'), not just the HTTP code. Set base_url to the gateway (http://localhost:8080) if you want to go through the API Gateway instead of hitting the service directly.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:8084" },
+    { "key": "order_id", "value": "1" }
+  ],
+  "item": [
+    {
+      "name": "Create Order (success path - use a productId with enough stock)",
+      "request": {
+        "method": "POST",
+        "header": [ { "key": "Content-Type", "value": "application/json" } ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"userId\": 1,\n  \"items\": [\n    { \"productId\": 1, \"quantity\": 2, \"price\": 19.99 },\n    { \"productId\": 2, \"quantity\": 1, \"price\": 49.50 }\n  ]\n}"
+        },
+        "url": { "raw": "{{base_url}}/api/orders", "host": [ "{{base_url}}" ], "path": [ "api", "orders" ] },
+        "description": "Reserves stock for each item then charges payment. Response status field will be CONFIRMED if both succeed."
+      }
+    },
+    {
+      "name": "Create Order (failure path - request more than available stock)",
+      "request": {
+        "method": "POST",
+        "header": [ { "key": "Content-Type", "value": "application/json" } ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"userId\": 1,\n  \"items\": [\n    { \"productId\": 1, \"quantity\": 999999, \"price\": 19.99 }\n  ]\n}"
+        },
+        "url": { "raw": "{{base_url}}/api/orders", "host": [ "{{base_url}}" ], "path": [ "api", "orders" ] },
+        "description": "Requests far more stock than exists, so inventory reservation fails with 409 Insufficient Stock. Order Service catches this, releases any already-reserved items, and persists the order as CANCELLED. Response is still 201 - check status field."
+      }
+    },
+    {
+      "name": "Get All Orders",
+      "request": {
+        "method": "GET",
+        "url": { "raw": "{{base_url}}/api/orders", "host": [ "{{base_url}}" ], "path": [ "api", "orders" ] }
+      }
+    },
+    {
+      "name": "Get Order By Id",
+      "request": {
+        "method": "GET",
+        "url": { "raw": "{{base_url}}/api/orders/{{order_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "orders", "{{order_id}}" ] }
+      }
+    },
+    {
+      "name": "Update Order",
+      "request": {
+        "method": "PUT",
+        "header": [ { "key": "Content-Type", "value": "application/json" } ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"userId\": 1,\n  \"items\": [\n    { \"productId\": 1, \"quantity\": 3, \"price\": 19.99 }\n  ]\n}"
+        },
+        "url": { "raw": "{{base_url}}/api/orders/{{order_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "orders", "{{order_id}}" ] }
+      }
+    },
+    {
+      "name": "Delete Order",
+      "request": {
+        "method": "DELETE",
+        "url": { "raw": "{{base_url}}/api/orders/{{order_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "orders", "{{order_id}}" ] }
+      }
+    }
+  ]
+}

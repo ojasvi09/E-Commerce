@@ -1,0 +1,58 @@
+{
+  "info": {
+    "name": "Notification Service",
+    "description": "CRUD requests for notification-service (Phase 1). Set base_url to the gateway (http://localhost:8080) if you want to go through the API Gateway instead of hitting the service directly.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:8086" },
+    { "key": "notification_id", "value": "1" }
+  ],
+  "item": [
+    {
+      "name": "Create Notification",
+      "request": {
+        "method": "POST",
+        "header": [ { "key": "Content-Type", "value": "application/json" } ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"userId\": 1,\n  \"message\": \"Your order has been placed successfully.\",\n  \"type\": \"EMAIL\",\n  \"status\": \"PENDING\"\n}"
+        },
+        "url": { "raw": "{{base_url}}/api/notifications", "host": [ "{{base_url}}" ], "path": [ "api", "notifications" ] }
+      }
+    },
+    {
+      "name": "Get All Notifications",
+      "request": {
+        "method": "GET",
+        "url": { "raw": "{{base_url}}/api/notifications", "host": [ "{{base_url}}" ], "path": [ "api", "notifications" ] }
+      }
+    },
+    {
+      "name": "Get Notification By Id",
+      "request": {
+        "method": "GET",
+        "url": { "raw": "{{base_url}}/api/notifications/{{notification_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "notifications", "{{notification_id}}" ] }
+      }
+    },
+    {
+      "name": "Update Notification",
+      "request": {
+        "method": "PUT",
+        "header": [ { "key": "Content-Type", "value": "application/json" } ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"userId\": 1,\n  \"message\": \"Your order has been shipped.\",\n  \"type\": \"EMAIL\",\n  \"status\": \"SENT\"\n}"
+        },
+        "url": { "raw": "{{base_url}}/api/notifications/{{notification_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "notifications", "{{notification_id}}" ] }
+      }
+    },
+    {
+      "name": "Delete Notification",
+      "request": {
+        "method": "DELETE",
+        "url": { "raw": "{{base_url}}/api/notifications/{{notification_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "notifications", "{{notification_id}}" ] }
+      }
+    }
+  ]
+}
