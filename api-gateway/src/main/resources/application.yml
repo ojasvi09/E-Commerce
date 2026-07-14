@@ -1,11 +1,20 @@
+# Port this service listens on. This is the single entry point external
+# clients should call (http://localhost:8080) instead of hitting any of the
+# 6 business services directly.
 server:
   port: 8080
 
 spring:
   application:
+    # Logical name for this service. Shows up in logs.
     name: api-gateway
   cloud:
     gateway:
+      # Static routing table: no service registry (Eureka/Consul) yet, so
+      # every route hardcodes the target service's localhost:<port>. Each
+      # entry says "if the incoming path matches this Path predicate, forward
+      # the request to this backend, unchanged." This only works because
+      # every service currently runs on the same machine with fixed ports.
       routes:
         - id: user-service
           uri: http://localhost:8081
@@ -36,4 +45,6 @@ management:
   endpoints:
     web:
       exposure:
+        # health/info as usual, plus "gateway" so you can inspect the live
+        # route table at runtime: GET /actuator/gateway/routes.
         include: health,info,gateway

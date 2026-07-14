@@ -1,21 +1,34 @@
+# Port this service listens on. The API Gateway routes /api/users/** here.
 server:
   port: 8081
 
 spring:
   application:
+    # Logical name for this service. Shows up in logs and would be used for
+    # service discovery (Eureka/Consul) if one is added in a later phase.
     name: user-service
   datasource:
+    # Own database per service (database-per-service pattern) — userdb is
+    # created by infra/postgres/init-databases.sql when Postgres first starts.
     url: jdbc:postgresql://localhost:5432/userdb
     username: postgres
     password: postgres
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
+      # update: Hibernate auto-creates/alters tables from your @Entity classes
+      # on startup. Fine for this learning project; a real production setup
+      # would use versioned migrations (Flyway/Liquibase) instead.
       ddl-auto: update
+    # Logs every generated SQL statement to the console — useful while
+    # developing, noisy in production.
     show-sql: true
 
 management:
   endpoints:
     web:
       exposure:
+        # Exposes /actuator/health and /actuator/info over HTTP. Actuator
+        # exposes nothing by default beyond /health, so this is an explicit
+        # opt-in list, not the full set of available endpoints.
         include: health,info
