@@ -25,7 +25,10 @@ public class OrderCreatedEventListener {
     private final InventoryService inventoryService;
     private final InventoryEventProducer eventProducer;
 
-    @KafkaListener(topics = KafkaTopics.ORDER_CREATED, groupId = "inventory-service")
+    @KafkaListener(
+            topics = KafkaTopics.ORDER_CREATED,
+            groupId = "inventory-service",
+            properties = "spring.json.value.default.type=com.ecommerce.inventory.event.OrderCreatedEvent")
     public void onOrderCreated(OrderCreatedEvent event) {
         log.info("Received OrderCreatedEvent for orderId {}, reserving {} item(s)",
                 event.orderId(), event.items().size());
@@ -39,6 +42,31 @@ public class OrderCreatedEventListener {
         } catch (RuntimeException ex) {
             log.error("Inventory reservation failed for orderId {}", event.orderId(), ex);
             eventProducer.publishFailed(new InventoryFailedEvent(event.orderId(), event.userId(), ex.getMessage()));
+            eventProducer.publishNotificationRequested(new NotificationRequestedEvent(
+                    event.orderId(), event.userId(),
+                    "Your order #" + event.orderId() + " was cancelled: item(s) out of stock (" + ex.getMessage() + ")"));
+        }
+    }
+
+    /**
+     * Compensating action: order-service only publishes OrderCancelledEvent when
+     * inventory HAD been reserved (payment failed after the fact) — see
+     * OrderService.markCancelled in order-service. It does not publish this event for
+     * the inventory-reservation-itself-failed case, since reserveAll() already rolled
+     * that back internally before InventoryFailedEvent was even sent.
+     */
+    @KafkaListener(
+            topics = KafkaTopics.ORDER_CANCELLED,
+            groupId = "inventory-service",
+            properties = "spring.json.value.default.type=com.ecommerce.inventory.event.OrderCancelledEvent")
+    public void onOrderCancelled(OrderCancelledEvent event) {
+        log.info("Received OrderCancelledEvent for orderId {}, releasing {} item(s)",
+                event.orderId(), event.items().size());
+        List<StockChangeRequest> released = event.items().stream()
+                .map(i -> new StockChangeRequest(i.productId(), i.quantity()))
+                .toList();
+        for (StockChangeRequest item : released) {
+            inventoryService.release(item);
         }
     }
 }

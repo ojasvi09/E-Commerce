@@ -6,6 +6,7 @@ import com.ecommerce.payment.entity.Payment;
 import com.ecommerce.payment.exception.PaymentNotFoundException;
 import com.ecommerce.payment.repository.PaymentRepository;
 import java.util.List;
+import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -34,6 +35,11 @@ public class PaymentService {
     @Transactional(readOnly = true)
     public PaymentResponse findById(Long id) {
         return toResponse(getOrThrow(id));
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<PaymentResponse> findByOrderId(Long orderId) {
+        return paymentRepository.findByOrderId(orderId).map(this::toResponse);
     }
 
     public PaymentResponse update(Long id, PaymentRequest request) {

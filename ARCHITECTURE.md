@@ -5,10 +5,12 @@ This file is the top-level map of the system. It is meant to be
 communication pattern between services (currently plain REST) is expected to
 change materially once Kafka is introduced (Phase 5+ per `plan.md`/`project.txt`).
 
-> Last updated: **Phase 3** (Order → Inventory → Payment → Notification
-> converted from Phase 2's synchronous OpenFeign calls to a fully
-> asynchronous Kafka producer/consumer chain). See each service's own
-> `README.md` for full detail — this file only summarizes and cross-links.
+> Last updated: **Phase 4** (Event-Driven Workflow — full domain event set:
+> `OrderCancelled`, `ShipmentCreated`, `NotificationRequested`,
+> `RefundInitiated` added on top of Phase 3's `OrderCreated`/
+> `InventoryReserved`/`InventoryFailed`/`PaymentSuccessful`/`PaymentFailed`).
+> See each service's own `README.md` for full detail — this file only
+> summarizes and cross-links.
 
 ## Services
 
@@ -29,14 +31,16 @@ services only reference each other by plain numeric id
 (`userId`, `productId`, `orderId`, …), never by foreign key constraint across
 databases.
 
-## How services communicate today (Phase 3)
+## How services communicate today (Phase 4)
 
-**Order placement is now fully asynchronous, event-driven via Kafka.**
-Phase 2's synchronous OpenFeign calls (Order → Inventory, Order → Payment)
-have been **removed entirely** — there is no more direct HTTP call between
-any of these four services. `user-service` and `product-service` remain
-completely uninvolved in this chain, exactly as in Phase 1/2 (their ids are
-still just opaque numbers referenced by other services).
+**Order placement is fully asynchronous, event-driven via Kafka** — no
+change from Phase 3 in that respect. Phase 4 adds the rest of the domain
+event set (`OrderCancelled`, `ShipmentCreated`, `NotificationRequested`,
+`RefundInitiated`) and, with it, two real compensating actions
+(compensating actions in the sense Phase 5's formal saga will build on —
+this phase is still choreography without a coordinator). `user-service` and
+`product-service` remain completely uninvolved in this chain, exactly as in
+every earlier phase.
 
 **Order placement flow** (`POST /api/orders` → eventual `CONFIRMED`/
 `CANCELLED`, see each service's own README for full detail):
@@ -48,39 +52,63 @@ still just opaque numbers referenced by other services).
 2. **Inventory Service** consumes `order.created`, tries to reserve stock
    for every line item (all-or-nothing: any single item failing releases
    everything already reserved for that order). Publishes
-   `inventory.reserved` on success, `inventory.failed` on failure.
+   `inventory.reserved` on success; on failure, publishes `inventory.failed`
+   **and** `notification.requested` (with a pre-built "out of stock"
+   message) — nothing was reserved, so there's nothing to compensate.
 3. **Payment Service** consumes `inventory.reserved`, charges the order
    total (simulated — no real payment gateway, same as every earlier
-   phase). Publishes `payment.successful` or `payment.failed`.
-4. **Order Service** separately consumes `inventory.failed`,
-   `payment.successful`, and `payment.failed` to update the order's final
-   status: `CONFIRMED` on `payment.successful`, `CANCELLED` on either
-   failure topic.
-5. **Notification Service** independently consumes the same three outcome
-   topics (`inventory.failed`, `payment.successful`, `payment.failed`) and
-   creates a notification record for the user — it does not wait for or
-   depend on Order Service's own listener; both react to the same events
-   in parallel.
+   phase). Publishes `payment.successful` or `payment.failed`, plus
+   `notification.requested` either way.
+4. **Order Service** consumes `inventory.failed`, `payment.successful`, and
+   `payment.failed` to update the order's final status:
+   - `inventory.failed` → `CANCELLED`, no further event published (nothing
+     was reserved).
+   - `payment.failed` → `CANCELLED`, **and** publishes `OrderCancelledEvent`
+     (with the order's items) to `order.cancelled` — inventory WAS reserved
+     before payment was attempted, so this is the signal to compensate.
+   - `payment.successful` → `CONFIRMED`, plus creates a `Shipment` record
+     and publishes `ShipmentCreatedEvent` to `shipment.created` (nothing
+     consumes this yet — it exists so fulfillment has a defined starting
+     event to build on later).
+5. **Inventory Service** separately consumes `order.cancelled` and releases
+   the stock listed in the event — the compensating action for a
+   successful reservation whose order was cancelled downstream.
+6. **Payment Service** separately consumes `order.cancelled`; if it finds a
+   `SUCCESSFUL` payment for that order, publishes `RefundInitiatedEvent` to
+   `refund.initiated` (simulated refund). In the current flow this never
+   actually fires for the `payment.failed` cancellation path (there's no
+   successful payment to refund in that case) — it's there for any future
+   cancellation source that arrives after a successful charge.
+7. **Notification Service** consumes a single topic, `notification.requested`,
+   built by whichever service (Inventory or Payment) decided the user needs
+   telling something. It no longer listens to raw domain events directly —
+   see notification-service's README for why.
 
-This is a straight-line async pipeline, not yet a formal saga with defined
-compensating transactions per step (that's Phase 5's scope) — Phase 3's
-goal was specifically "convert the chain to producer/consumer," which this
-is.
+Still not a formal saga with a coordinator (that's Phase 5's scope) — this
+is choreography: each service reacts to events relevant to it and decides
+its own compensating action independently.
 
 ## Kafka topics
 
 | Topic | Producer | Consumers | Payload |
 |---|---|---|---|
 | `order.created` | order-service | inventory-service | `OrderCreatedEvent` (orderId, userId, totalAmount, items) |
+| `order.cancelled` | order-service | inventory-service, payment-service | `OrderCancelledEvent` (orderId, userId, reason, items) |
+| `shipment.created` | order-service | *(none yet)* | `ShipmentCreatedEvent` (orderId, userId, shipmentId) |
 | `inventory.reserved` | inventory-service | payment-service | `InventoryReservedEvent` (orderId, userId, totalAmount) |
-| `inventory.failed` | inventory-service | order-service, notification-service | `InventoryFailedEvent` (orderId, userId, reason) |
-| `payment.successful` | payment-service | order-service, notification-service | `PaymentSuccessfulEvent` (orderId, userId, amount) |
-| `payment.failed` | payment-service | order-service, notification-service | `PaymentFailedEvent` (orderId, userId, reason) |
+| `inventory.failed` | inventory-service | order-service | `InventoryFailedEvent` (orderId, userId, reason) |
+| `payment.successful` | payment-service | order-service | `PaymentSuccessfulEvent` (orderId, userId, amount) |
+| `payment.failed` | payment-service | order-service | `PaymentFailedEvent` (orderId, userId, reason) |
+| `refund.initiated` | payment-service | *(none yet)* | `RefundInitiatedEvent` (orderId, userId, amount, reason) |
+| `notification.requested` | inventory-service, payment-service | notification-service | `NotificationRequestedEvent` (orderId, userId, message) |
 
 Each topic has 3 partitions, replication factor 1 (single-broker dev
 setup), declared via `NewTopic` beans (`config/KafkaTopicConfig.java`) in
 whichever service produces that topic — Spring Boot auto-creates them on
-startup if they don't already exist. Every producer keys messages by
+startup if they don't already exist. `notification.requested` is declared
+by both inventory-service and payment-service (both produce onto it);
+duplicate `NewTopic` beans for the same name/partition count are harmless,
+Kafka just no-ops on the second one. Every producer keys messages by
 `orderId.toString()`, so all events for one order land on the same
 partition and are processed in order by a given consumer instance.
 
@@ -111,26 +139,25 @@ now has two distinct forms:
   API Gateway (`api-gateway`, port `8080`), which has a hardcoded route
   table mapping `/api/{resource}/**` path prefixes to each service's
   `localhost:<port>`. See [api-gateway/README.md](api-gateway/README.md).
-  The gateway itself is untouched by Phase 3 — client-facing traffic is
-  still synchronous REST.
-- **Service → service**: as of Phase 3, this is no longer HTTP-based at
-  all for the Order/Inventory/Payment/Notification chain. Every service
-  points at the same Kafka broker (`spring.kafka.bootstrap-servers:
-  localhost:9092`, hardcoded in each `application.yml` — still no registry,
-  just one shared address instead of many per-service ones) and "discovers"
-  what it needs by topic name (plain string constants in each service's own
-  `event/KafkaTopics.java`). There is no longer a `services.inventory.url` /
-  `services.payment.url` anywhere in the codebase — those were removed
-  along with the Feign clients.
+  The gateway itself is untouched through Phase 4 — client-facing traffic
+  is still synchronous REST.
+- **Service → service**: no longer HTTP-based at all for the
+  Order/Inventory/Payment/Notification chain (as of Phase 3, extended in
+  Phase 4). Every service points at the same Kafka broker
+  (`spring.kafka.bootstrap-servers: localhost:9092`, hardcoded in each
+  `application.yml` — still no registry, just one shared address instead of
+  many per-service ones) and "discovers" what it needs by topic name (plain
+  string constants in each service's own `event/KafkaTopics.java`). There
+  is no `services.inventory.url` / `services.payment.url` anywhere in the
+  codebase — those were removed along with the Feign clients in Phase 3.
 
 ## Planned evolution (do not implement yet — tracked here for context only)
 
 Per `plan.md`/`project.txt`, later phases are expected to add:
-- The full domain event set beyond what Phase 3 needed (Phase 4):
-  `OrderCancelled`, `ShipmentCreated`, `NotificationRequested`,
-  `RefundInitiated`, and moving *all* inter-service business communication
-  onto Kafka as the primary channel (Phase 3 only converted this one chain)
-- A formal choreography-based saga with compensating actions (Phase 5)
+- A formal saga with an orchestrator/coordinator, for comparison against
+  today's choreography-only approach (Phase 5) — right now each service
+  decides its own compensating action independently; nothing sequences or
+  tracks the saga as a whole
 - Transactional outbox per service so DB writes and event publishing stay
   atomic (Phase 6) — right now, e.g., Inventory Service's stock reservation
   and its `inventory.reserved`/`inventory.failed` publish are two separate
@@ -139,13 +166,20 @@ Per `plan.md`/`project.txt`, later phases are expected to add:
 - Retry with backoff + dead-letter topics on consumers (Phase 7)
 - Idempotency via a `processed_events` table per consumer (Phase 8) — right
   now, a redelivered message (e.g. after a consumer restart mid-processing)
-  would be reprocessed with no de-duplication
+  would be reprocessed with no de-duplication. This is a real gap already:
+  the manual `order.cancelled` compensating-action test during Phase 4
+  development showed a redelivery would double-release stock or
+  double-refund with no guard in place today
 - Spring Security / auth on the gateway and services (Phase 10)
 - Redis caching
 - Testcontainers-based integration tests
 - Docker Compose bringing up the services themselves (Phase 11) — today's
   `docker-compose.yml` only runs infra (Postgres, Kafka, Zookeeper, Redis),
   not the Spring Boot apps
+- A real Shipment domain (carrier, tracking number, delivery status) and
+  possibly its own microservice — Phase 4 only added a minimal `Shipment`
+  record inside order-service to give `ShipmentCreatedEvent` somewhere to
+  come from; nothing consumes that event yet
 
 When any of the above lands, update this file's "Services" table status line
 and the "How services communicate" / "discover" sections above — do not let

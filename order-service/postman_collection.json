@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "Order Service",
-    "description": "CRUD requests for order-service. As of Phase 3, Create Order is ASYNCHRONOUS: it publishes an OrderCreatedEvent to Kafka and returns immediately with status CREATED — it does NOT reserve stock or charge payment inline anymore. Run 'Get Order By Id' a moment after creating to see it settle into CONFIRMED or CANCELLED once inventory-service/payment-service/Kafka have processed the event. Set base_url to the gateway (http://localhost:8080) if you want to go through the API Gateway instead of hitting the service directly.",
+    "description": "CRUD requests for order-service. Create Order is ASYNCHRONOUS: it publishes an OrderCreatedEvent to Kafka and returns immediately with status CREATED — it does NOT reserve stock or charge payment inline. Run 'Get Order By Id' a moment after creating to see it settle into CONFIRMED or CANCELLED once inventory-service/payment-service/Kafka have processed the event. As of Phase 4: a CONFIRMED order also gets a Shipment record (see GET /api/orders/{id}/... note below — there is no shipment endpoint yet, check inventory-service/payment-service logs or kafka-ui's shipment.created topic to see it). Set base_url to the gateway (http://localhost:8080) if you want to go through the API Gateway instead of hitting the service directly.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -39,7 +39,8 @@
       "name": "3. Get Order By Id (poll this after Create Order to see CREATED -> CONFIRMED/CANCELLED)",
       "request": {
         "method": "GET",
-        "url": { "raw": "{{base_url}}/api/orders/{{order_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "orders", "{{order_id}}" ] }
+        "url": { "raw": "{{base_url}}/api/orders/{{order_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "orders", "{{order_id}}" ] },
+        "description": "CONFIRMED means: payment succeeded, a Shipment row was created, and ShipmentCreatedEvent was published to shipment.created (check kafka-ui, port 8090, to see it — no consumer/endpoint reads it yet). CANCELLED from inventory failure means nothing was ever reserved (no compensating events). CANCELLED from payment failure additionally publishes OrderCancelledEvent to order.cancelled, which inventory-service consumes to release the stock it reserved, and payment-service consumes to check for a refund."
       }
     },
     {

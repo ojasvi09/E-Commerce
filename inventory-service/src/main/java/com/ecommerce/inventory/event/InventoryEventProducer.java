@@ -35,4 +35,15 @@ public class InventoryEventProducer {
                     }
                 });
     }
+
+    public void publishNotificationRequested(NotificationRequestedEvent event) {
+        kafkaTemplate.send(KafkaTopics.NOTIFICATION_REQUESTED, event.orderId().toString(), event)
+                .whenComplete((result, ex) -> {
+                    if (ex != null) {
+                        log.error("Failed to publish NotificationRequestedEvent for orderId {}", event.orderId(), ex);
+                    } else {
+                        log.info("Published NotificationRequestedEvent for orderId {}", event.orderId());
+                    }
+                });
+    }
 }

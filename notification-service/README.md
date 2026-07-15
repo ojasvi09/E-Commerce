@@ -7,16 +7,20 @@ actually send email/SMS in Phase 1 — it only persists the notification
 record and its status; real delivery integration is a later-phase concern.
 
 ## Current phase status
-**Phase 3** (Kafka Integration): this service now consumes the three
-possible final outcomes of an order — `payment.successful`,
-`payment.failed`, `inventory.failed` — and automatically creates a
-notification record for the user. It is the last stage of the Phase 3
-event chain (Order → Inventory → Payment → Notification) and does not
-depend on or wait for Order Service's own listener; both consume the same
-events independently. Delivery itself (actually sending an email/SMS) is
-still not implemented — same as Phase 1/2, this only persists the
-notification's intent.
+**Phase 4** (Event-Driven Workflow): this service no longer listens to raw
+domain events directly. Instead, every producing service (Inventory,
+Payment) builds its own user-facing message and publishes a single
+`NotificationRequestedEvent` to `notification.requested` — this service
+just consumes that one topic and creates a notification record. This keeps
+Notification Service a dumb sink regardless of how many upstream
+services/reasons exist to notify a user, and centralizes "what does the
+user see" in the service that knows the actual outcome, not here.
+Delivery itself (actually sending an email/SMS) is still not implemented —
+this only persists the notification's intent.
 
+Phase 3 baseline (Kafka Integration): consumed `payment.successful`,
+`payment.failed`, `inventory.failed` directly, building the message itself
+per event type — superseded by the single-topic approach above.
 Phase 1 baseline: CRUD REST API + Postgres persistence, no Kafka consumer.
 
 ## Tech
@@ -53,16 +57,17 @@ Errors follow the shared `ApiError` shape.
 - 404 when notification id not found
 - 400 with field-level `details` on validation failure
 
-## How notification creation actually works now (Phase 3)
+## How notification creation actually works now (Phase 4)
 
-`event/OrderOutcomeEventListener.java` has three separate `@KafkaListener`
-methods, one per topic (all in consumer group `notification-service`):
-- `payment.successful` → creates an `EMAIL`/`PENDING` notification: "Your
-  order #N has been confirmed. Amount charged: X"
-- `payment.failed` → creates an `EMAIL`/`PENDING` notification: "Your
-  order #N was cancelled: payment failed (reason)"
-- `inventory.failed` → creates an `EMAIL`/`PENDING` notification: "Your
-  order #N was cancelled: item(s) out of stock (reason)"
+`event/NotificationRequestedEventListener.java` has a single
+`@KafkaListener` method on `notification.requested` (consumer group
+`notification-service`). It creates an `EMAIL`/`PENDING` notification from
+whatever `message` string the producing service already built:
+- **Inventory Service** publishes this when stock reservation fails:
+  "Your order #N was cancelled: item(s) out of stock (reason)"
+- **Payment Service** publishes this on both charge outcomes: "Your order
+  #N has been confirmed. Amount charged: X" or "Your order #N was
+  cancelled: payment failed (reason)"
 
 Each event carries `userId` (threaded through from `OrderCreatedEvent` at
 the start of the chain, through every intermediate event, specifically so
@@ -72,13 +77,14 @@ notify).
 ## Kafka topics this service produces/consumes
 | Topic | Direction | Payload | Consumer group (this service) |
 |---|---|---|---|
-| `payment.successful` | consumes | `PaymentSuccessfulEvent` | `notification-service` |
-| `payment.failed` | consumes | `PaymentFailedEvent` | `notification-service` |
-| `inventory.failed` | consumes | `InventoryFailedEvent` | `notification-service` |
+| `notification.requested` | consumes | `NotificationRequestedEvent` | `notification-service` |
 
 This service produces no topics of its own — it's a pure sink at the end of
 the chain. Event classes live in `event/` and are this service's own local
-copies (not shared with the producing services).
+copy (not shared with the producing services). Since this service now
+consumes exactly one topic/event type, `spring.json.value.default.type` is
+set once at the consumer-factory level in `application.yml`, not
+per-listener.
 
 ## How other services find this service
 No service registry yet. This service doesn't need to be *found* by

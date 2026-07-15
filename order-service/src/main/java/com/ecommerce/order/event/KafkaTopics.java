@@ -4,6 +4,8 @@ package com.ecommerce.order.event;
 public final class KafkaTopics {
 
     public static final String ORDER_CREATED = "order.created";
+    public static final String ORDER_CANCELLED = "order.cancelled";
+    public static final String SHIPMENT_CREATED = "shipment.created";
     public static final String INVENTORY_FAILED = "inventory.failed";
     public static final String PAYMENT_SUCCESSFUL = "payment.successful";
     public static final String PAYMENT_FAILED = "payment.failed";

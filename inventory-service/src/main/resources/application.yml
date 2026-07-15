@@ -39,11 +39,11 @@ spring:
       value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
       properties:
         spring.json.trusted.packages: com.ecommerce.inventory.event
-        # Deserialize into this service's own local OrderCreatedEvent copy, not
-        # whatever package order-service's producer used (see order-service's
-        # application.yml for the fuller explanation of why).
-        spring.json.value.default.type: com.ecommerce.inventory.event.OrderCreatedEvent
         spring.json.use.type.headers: false
+        # As of Phase 4 this service consumes two topics/event types
+        # (order.created, order.cancelled), so each @KafkaListener in
+        # OrderCreatedEventListener overrides spring.json.value.default.type
+        # per-listener instead of relying on one consumer-factory-wide default.
       auto-offset-reset: earliest
 
 management:

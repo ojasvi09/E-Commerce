@@ -37,8 +37,10 @@ spring:
       value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
       properties:
         spring.json.trusted.packages: com.ecommerce.payment.event
-        spring.json.value.default.type: com.ecommerce.payment.event.InventoryReservedEvent
         spring.json.use.type.headers: false
+        # As of Phase 4 this service consumes two topics/event types
+        # (inventory.reserved, order.cancelled), so each @KafkaListener overrides
+        # spring.json.value.default.type per-listener instead of one shared default.
       auto-offset-reset: earliest
 
 management:

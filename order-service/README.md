@@ -9,15 +9,20 @@ time (so historical orders aren't affected by later product price changes).
 all items.
 
 ## Current phase status
-**Phase 3** (Kafka Integration) replaced Phase 2's synchronous OpenFeign
-calls entirely: placing an order now publishes an event and returns
-immediately with status `CREATED`. Inventory/Payment/Notification react to
-that event asynchronously via Kafka, and this service listens for their
-outcomes to update the order's final status. There is no more direct HTTP
-call from Order Service to Inventory or Payment — see "How order placement
-works now" below.
+**Phase 4** (Event-Driven Workflow) extends Phase 3's chain with two new
+events this service produces: `OrderCancelledEvent` (published only when
+inventory had already been reserved for the order, so Inventory Service can
+release it — see "How order placement works now" below) and
+`ShipmentCreatedEvent` (published once an order is confirmed, alongside a
+new lightweight `Shipment` record persisted here). There is no dedicated
+Shipment microservice — Phase 1 fixed the service list at 7, so this service
+owns the minimal shipment record since it already owns order lifecycle
+state.
 
-Phase 1 baseline: CRUD REST API + Postgres persistence.
+Phase 3 baseline (Kafka Integration): replaced Phase 2's synchronous
+OpenFeign calls entirely — placing an order publishes `OrderCreatedEvent`
+and returns immediately with status `CREATED`; Inventory/Payment/
+Notification react asynchronously.
 Phase 2 (superseded): synchronous OpenFeign + Resilience4j — removed in
 Phase 3, kept here in history only as context for why some patterns exist
 (e.g. `OrderStatus.CREATED` as a real, now much more visible, intermediate
@@ -25,11 +30,15 @@ state).
 
 ## Tech
 - Spring Boot 3.3.4, Spring Data JPA, Bean Validation
-- Spring Kafka (`spring-kafka`) — producer for `order.created`, consumer for
-  `inventory.failed` / `payment.successful` / `payment.failed`
+- Spring Kafka (`spring-kafka`) — producer for `order.created` /
+  `order.cancelled` / `shipment.created`, consumer for `inventory.failed` /
+  `payment.successful` / `payment.failed`
 - Database: PostgreSQL, schema `orderdb` (own database)
 - Port: `8084`
 - `Order` 1:N `OrderItem` via JPA `@OneToMany(cascade = ALL, orphanRemoval = true)`
+- `Shipment` — new in Phase 4, one row per confirmed order (`orderId`,
+  `createdAt`), no relationship back to `Order` beyond the plain id
+  reference (same loose-coupling convention as everywhere else)
 
 ## Data model
 **Order**
@@ -91,7 +100,7 @@ Errors follow the shared `ApiError` shape.
 - 404 when order id not found
 - 400 with field-level `details` on validation failure (e.g., empty `items`)
 
-## How order placement actually works now (Phase 3)
+## How order placement actually works now (Phase 4)
 
 `OrderService.create()`:
 1. Builds the `Order` + `OrderItem`s and persists it as `CREATED`.
@@ -104,27 +113,48 @@ Errors follow the shared `ApiError` shape.
 Downstream, asynchronously:
 4. **Inventory Service** consumes `order.created`, tries to reserve stock
    for every line item (all-or-nothing — see its own README), and publishes
-   either `inventory.reserved` or `inventory.failed`.
+   either `inventory.reserved` or `inventory.failed` (+ `NotificationRequestedEvent`
+   on failure).
 5. **Payment Service** consumes `inventory.reserved`, charges the order
-   total, and publishes either `payment.successful` or `payment.failed`.
-6. **This service** listens for all three possible outcomes
-   (`inventory.failed`, `payment.successful`, `payment.failed`) via
-   `event/OrderEventListener.java` and updates the order:
-   - `inventory.failed` or `payment.failed` → `OrderService.markCancelled()`
-   - `payment.successful` → `OrderService.markConfirmed()`
-7. **Notification Service** independently consumes the same three outcome
-   topics and creates a notification record for the user — it does not wait
-   for or depend on Order Service's own listener.
+   total, and publishes either `payment.successful` or `payment.failed`
+   (+ `NotificationRequestedEvent` either way).
+6. **This service** listens for all three possible outcomes via
+   `event/OrderEventListener.java`:
+   - `inventory.failed` → `OrderService.markCancelled(orderId, reason, releaseInventory=false)`.
+     Inventory reservation never happened (or was already rolled back
+     internally by `reserveAll`), so **no** `OrderCancelledEvent` is
+     published here — there's nothing to release.
+   - `payment.failed` → `OrderService.markCancelled(orderId, reason, releaseInventory=true)`.
+     Inventory WAS reserved before payment was attempted, so this publishes
+     `OrderCancelledEvent` (orderId, userId, reason, items) to
+     `order.cancelled` — Inventory Service consumes it and releases the
+     stock; Payment Service consumes it too and issues a refund if it finds
+     a `SUCCESSFUL` payment for that order (it won't in this exact case,
+     since payment just failed, but the same event covers any future
+     cancellation source that arrives after a successful charge).
+   - `payment.successful` → `OrderService.markConfirmed()`, which also
+     creates a `Shipment` row and publishes `ShipmentCreatedEvent`
+     (orderId, userId, shipmentId) to `shipment.created` — the start of
+     fulfillment. Nothing consumes this yet (no shipment/tracking consumer
+     exists); it exists so the event is defined and fired per Phase 4's
+     requirement, ready for a future consumer.
+7. **Notification Service** consumes a single `NotificationRequestedEvent`
+   stream (topic `notification.requested`) built by whichever service
+   decided the user needs telling something — it no longer listens to the
+   raw outcome events directly (see notification-service's README).
 
-This is deliberately **not yet a formal saga** with defined compensating
-transactions per step (that's Phase 5) — Phase 3's scope is just "convert
-the chain to producer/consumer," which is what this is: a straight-line
-async pipeline, not a saga with a coordinator or compensation graph.
+This is deliberately **not yet a formal saga** with a coordinator — that's
+Phase 5's scope. Phase 4 is choreography-style: each service reacts to the
+events relevant to it and decides its own compensating action
+(Inventory releases stock, Payment refunds) without any central
+orchestrator directing the sequence.
 
 ## Kafka topics this service produces/consumes
 | Topic | Direction | Payload | Consumer group (this service) |
 |---|---|---|---|
 | `order.created` | produces | `OrderCreatedEvent` | – (n/a, this service produces it) |
+| `order.cancelled` | produces | `OrderCancelledEvent` | – (n/a, this service produces it) |
+| `shipment.created` | produces | `ShipmentCreatedEvent` | – (n/a, this service produces it) |
 | `inventory.failed` | consumes | `InventoryFailedEvent` | `order-service` |
 | `payment.successful` | consumes | `PaymentSuccessfulEvent` | `order-service` |
 | `payment.failed` | consumes | `PaymentFailedEvent` | `order-service` |

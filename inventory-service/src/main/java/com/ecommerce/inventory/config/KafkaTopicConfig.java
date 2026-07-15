@@ -6,7 +6,10 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.config.TopicBuilder;
 
-/** Declares the topics this service owns/produces: inventory.reserved and inventory.failed. */
+/**
+ * Declares the topics this service owns/produces: inventory.reserved, inventory.failed,
+ * and notification.requested (shared topic — payment-service also produces onto it).
+ */
 @Configuration
 public class KafkaTopicConfig {
 
@@ -18,5 +21,10 @@ public class KafkaTopicConfig {
     @Bean
     public NewTopic inventoryFailedTopic() {
         return TopicBuilder.name(KafkaTopics.INVENTORY_FAILED).partitions(3).replicas(1).build();
+    }
+
+    @Bean
+    public NewTopic notificationRequestedTopic() {
+        return TopicBuilder.name(KafkaTopics.NOTIFICATION_REQUESTED).partitions(3).replicas(1).build();
     }
 }

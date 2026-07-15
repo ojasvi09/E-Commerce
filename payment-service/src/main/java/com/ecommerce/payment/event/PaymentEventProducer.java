@@ -35,4 +35,26 @@ public class PaymentEventProducer {
                     }
                 });
     }
+
+    public void publishNotificationRequested(NotificationRequestedEvent event) {
+        kafkaTemplate.send(KafkaTopics.NOTIFICATION_REQUESTED, event.orderId().toString(), event)
+                .whenComplete((result, ex) -> {
+                    if (ex != null) {
+                        log.error("Failed to publish NotificationRequestedEvent for orderId {}", event.orderId(), ex);
+                    } else {
+                        log.info("Published NotificationRequestedEvent for orderId {}", event.orderId());
+                    }
+                });
+    }
+
+    public void publishRefundInitiated(RefundInitiatedEvent event) {
+        kafkaTemplate.send(KafkaTopics.REFUND_INITIATED, event.orderId().toString(), event)
+                .whenComplete((result, ex) -> {
+                    if (ex != null) {
+                        log.error("Failed to publish RefundInitiatedEvent for orderId {}", event.orderId(), ex);
+                    } else {
+                        log.info("Published RefundInitiatedEvent for orderId {}", event.orderId());
+                    }
+                });
+    }
 }

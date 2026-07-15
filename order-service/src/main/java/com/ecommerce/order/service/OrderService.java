@@ -7,10 +7,14 @@ import com.ecommerce.order.dto.OrderResponse;
 import com.ecommerce.order.entity.Order;
 import com.ecommerce.order.entity.OrderItem;
 import com.ecommerce.order.entity.OrderStatus;
+import com.ecommerce.order.entity.Shipment;
+import com.ecommerce.order.event.OrderCancelledEvent;
 import com.ecommerce.order.event.OrderCreatedEvent;
 import com.ecommerce.order.event.OrderEventProducer;
+import com.ecommerce.order.event.ShipmentCreatedEvent;
 import com.ecommerce.order.exception.OrderNotFoundException;
 import com.ecommerce.order.repository.OrderRepository;
+import com.ecommerce.order.repository.ShipmentRepository;
 import java.math.BigDecimal;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
@@ -27,6 +31,7 @@ public class OrderService {
     private static final Logger log = LoggerFactory.getLogger(OrderService.class);
 
     private final OrderRepository orderRepository;
+    private final ShipmentRepository shipmentRepository;
     private final OrderEventProducer orderEventProducer;
 
     /**
@@ -49,18 +54,44 @@ public class OrderService {
         return toResponse(saved);
     }
 
-    /** Called by PaymentSuccessfulListener once payment for this order has succeeded. */
+    /**
+     * Called once payment for this order has succeeded. Confirms the order, creates a
+     * Shipment record, and publishes ShipmentCreatedEvent — the start of fulfillment.
+     * No dedicated Shipment microservice exists yet (out of scope for Phase 4's fixed
+     * 7-service list), so this lives here since Order Service already owns order
+     * lifecycle state.
+     */
     public void markConfirmed(Long orderId) {
         Order order = getOrThrow(orderId);
         order.setStatus(OrderStatus.CONFIRMED);
         log.info("Order {} confirmed", orderId);
+
+        Shipment shipment = shipmentRepository.save(Shipment.builder().orderId(orderId).build());
+        orderEventProducer.publishShipmentCreated(
+                new ShipmentCreatedEvent(orderId, order.getUserId(), shipment.getId()));
     }
 
-    /** Called by InventoryFailedListener/PaymentFailedListener when fulfillment fails downstream. */
-    public void markCancelled(Long orderId, String reason) {
+    /**
+     * Called by InventoryFailedListener when inventory-service couldn't reserve stock
+     * (reserveAll already rolled back internally — nothing to release) or by
+     * PaymentFailedListener when payment fails after inventory WAS reserved.
+     * releaseInventory distinguishes the two: only the payment-failure path publishes
+     * OrderCancelledEvent, since that's the only case inventory-service needs to react
+     * to with a compensating release. Publishing it unconditionally would make
+     * inventory-service release stock it never reserved for the inventory-failure case.
+     */
+    public void markCancelled(Long orderId, String reason, boolean releaseInventory) {
         Order order = getOrThrow(orderId);
         order.setStatus(OrderStatus.CANCELLED);
         log.info("Order {} cancelled: {}", orderId, reason);
+
+        if (releaseInventory) {
+            List<OrderCreatedEvent.Item> items = order.getItems().stream()
+                    .map(i -> new OrderCreatedEvent.Item(i.getProductId(), i.getQuantity(), i.getPrice()))
+                    .toList();
+            orderEventProducer.publishOrderCancelled(
+                    new OrderCancelledEvent(orderId, order.getUserId(), reason, items));
+        }
     }
 
     private Order buildOrder(OrderRequest request) {

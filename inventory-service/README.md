@@ -8,21 +8,24 @@ coupled from Product Service per `plan.md`'s "duplicate DTOs, don't share
 domain models" rule.
 
 ## Current phase status
-**Phase 3** (Kafka Integration): this service now consumes `order.created`
-events from Kafka and reserves stock automatically — Order Service no
-longer calls `/api/inventory/reserve` directly over HTTP (that was Phase
-2's approach). The REST `reserve`/`release` endpoints still exist and still
-work exactly as before, for manual testing/Postman use; they're just no
-longer in the live order-placement path.
+**Phase 4** (Event-Driven Workflow): this service now also consumes
+`order.cancelled` to release stock it previously reserved (the compensating
+action when payment fails after reservation succeeded — see order-service's
+README), and publishes `NotificationRequestedEvent` alongside
+`InventoryFailedEvent` when reservation itself fails, so Notification
+Service doesn't need to listen to raw domain events anymore.
 
-Phase 1 baseline: CRUD REST API + Postgres persistence.
+Phase 3 baseline (Kafka Integration): started consuming `order.created`
+events from Kafka and reserving stock automatically — Order Service no
+longer calls `/api/inventory/reserve` directly over HTTP.
 Phase 2 (superseded): reserve/release were called synchronously by Order
 Service's OpenFeign client — replaced by the Kafka listener below.
 
 ## Tech
 - Spring Boot 3.3.4, Spring Data JPA, Bean Validation
-- Spring Kafka (`spring-kafka`) — consumer for `order.created`, producer for
-  `inventory.reserved` / `inventory.failed`
+- Spring Kafka (`spring-kafka`) — consumer for `order.created` /
+  `order.cancelled`, producer for `inventory.reserved` / `inventory.failed`
+  / `notification.requested`
 - Database: PostgreSQL, schema `inventorydb` (own database)
 - Port: `8083`
 
@@ -63,34 +66,47 @@ Errors follow the shared `ApiError` shape.
 - 409 when an inventory record for that `productId` already exists (on create), or stock is insufficient (on reserve)
 - 400 with field-level `details` on validation failure
 
-## How order reservation actually works now (Phase 3)
+## How order reservation actually works now (Phase 4)
 
-`event/OrderCreatedEventListener.java` consumes `order.created`
-(consumer group `inventory-service`):
-1. Converts each `OrderCreatedEvent.Item` into a `StockChangeRequest` and
-   calls the new `InventoryService.reserveAll(items)` — an all-or-nothing
-   reservation: if any item fails (not found or insufficient stock), every
-   item already reserved in that same call is released before the exception
-   propagates, so a partially-fulfilled order never leaves stock partially
-   decremented.
-2. On success: publishes `InventoryReservedEvent` (orderId, userId,
-   totalAmount) to `inventory.reserved`, picked up next by Payment Service.
-3. On failure: publishes `InventoryFailedEvent` (orderId, userId, reason) to
-   `inventory.failed`, picked up by both Order Service (cancels the order)
-   and Notification Service (notifies the user).
+`event/OrderCreatedEventListener.java` consumes both `order.created` and
+`order.cancelled` (consumer group `inventory-service`):
+1. `onOrderCreated`: converts each `OrderCreatedEvent.Item` into a
+   `StockChangeRequest` and calls `InventoryService.reserveAll(items)` — an
+   all-or-nothing reservation: if any item fails (not found or insufficient
+   stock), every item already reserved in that same call is released before
+   the exception propagates, so a partially-fulfilled order never leaves
+   stock partially decremented.
+   - On success: publishes `InventoryReservedEvent` (orderId, userId,
+     totalAmount) to `inventory.reserved`, picked up next by Payment Service.
+   - On failure: publishes `InventoryFailedEvent` (orderId, userId, reason)
+     to `inventory.failed` **and** `NotificationRequestedEvent` (orderId,
+     userId, a pre-built "out of stock" message) to `notification.requested`
+     — Order Service consumes `inventory.failed` to cancel the order,
+     Notification Service consumes `notification.requested` to notify the
+     user; neither needs to build the message itself anymore.
+2. `onOrderCancelled` (new in Phase 4): order-service only publishes
+   `OrderCancelledEvent` when this service HAD successfully reserved stock
+   for that order (see order-service's README on `releaseInventory`) — so
+   this listener releases every item in the event's `items` list
+   unconditionally, no additional check needed. This is the compensating
+   action for the case where inventory reservation succeeded but payment
+   failed afterward.
 
 ## Kafka topics this service produces/consumes
 | Topic | Direction | Payload | Consumer group (this service) |
 |---|---|---|---|
 | `order.created` | consumes | `OrderCreatedEvent` | `inventory-service` |
+| `order.cancelled` | consumes | `OrderCancelledEvent` | `inventory-service` |
 | `inventory.reserved` | produces | `InventoryReservedEvent` | – |
 | `inventory.failed` | produces | `InventoryFailedEvent` | – |
+| `notification.requested` | produces | `NotificationRequestedEvent` | – (shared topic — payment-service also produces onto it) |
 
 Event classes live in `event/` and are this service's own local copies
 (not shared with order-service or payment-service) — see order-service's
-README for why, and for the `spring.json.value.default.type` deserialization
-note (this service only listens to one topic/type, so it's configured once
-at the consumer-factory level in `application.yml` rather than per-listener).
+README for why. As of Phase 4 this service listens to two topics/event
+types, so each `@KafkaListener` in `OrderCreatedEventListener` overrides
+`spring.json.value.default.type` per-listener instead of relying on one
+consumer-factory-wide default.
 
 ## How other services find this service
 No service registry yet. Discovery is now entirely via Kafka topic names

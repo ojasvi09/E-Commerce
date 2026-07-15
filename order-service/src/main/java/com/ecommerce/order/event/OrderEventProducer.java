@@ -26,4 +26,26 @@ public class OrderEventProducer {
                     }
                 });
     }
+
+    public void publishOrderCancelled(OrderCancelledEvent event) {
+        kafkaTemplate.send(KafkaTopics.ORDER_CANCELLED, event.orderId().toString(), event)
+                .whenComplete((result, ex) -> {
+                    if (ex != null) {
+                        log.error("Failed to publish OrderCancelledEvent for orderId {}", event.orderId(), ex);
+                    } else {
+                        log.info("Published OrderCancelledEvent for orderId {}", event.orderId());
+                    }
+                });
+    }
+
+    public void publishShipmentCreated(ShipmentCreatedEvent event) {
+        kafkaTemplate.send(KafkaTopics.SHIPMENT_CREATED, event.orderId().toString(), event)
+                .whenComplete((result, ex) -> {
+                    if (ex != null) {
+                        log.error("Failed to publish ShipmentCreatedEvent for orderId {}", event.orderId(), ex);
+                    } else {
+                        log.info("Published ShipmentCreatedEvent for orderId {}", event.orderId());
+                    }
+                });
+    }
 }

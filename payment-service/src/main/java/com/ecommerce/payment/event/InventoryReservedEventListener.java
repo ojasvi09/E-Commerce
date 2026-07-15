@@ -27,7 +27,10 @@ public class InventoryReservedEventListener {
     private final PaymentService paymentService;
     private final PaymentEventProducer eventProducer;
 
-    @KafkaListener(topics = KafkaTopics.INVENTORY_RESERVED, groupId = "payment-service")
+    @KafkaListener(
+            topics = KafkaTopics.INVENTORY_RESERVED,
+            groupId = "payment-service",
+            properties = "spring.json.value.default.type=com.ecommerce.payment.event.InventoryReservedEvent")
     public void onInventoryReserved(InventoryReservedEvent event) {
         log.info("Received InventoryReservedEvent for orderId {}, charging {}",
                 event.orderId(), event.totalAmount());
@@ -35,9 +38,15 @@ public class InventoryReservedEventListener {
             paymentService.create(new PaymentRequest(event.orderId(), event.totalAmount(), PaymentStatus.SUCCESSFUL));
             eventProducer.publishSuccessful(
                     new PaymentSuccessfulEvent(event.orderId(), event.userId(), event.totalAmount()));
+            eventProducer.publishNotificationRequested(new NotificationRequestedEvent(
+                    event.orderId(), event.userId(),
+                    "Your order #" + event.orderId() + " has been confirmed. Amount charged: " + event.totalAmount()));
         } catch (RuntimeException ex) {
             log.error("Payment failed for orderId {}", event.orderId(), ex);
             eventProducer.publishFailed(new PaymentFailedEvent(event.orderId(), event.userId(), ex.getMessage()));
+            eventProducer.publishNotificationRequested(new NotificationRequestedEvent(
+                    event.orderId(), event.userId(),
+                    "Your order #" + event.orderId() + " was cancelled: payment failed (" + ex.getMessage() + ")"));
         }
     }
 }
