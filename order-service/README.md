@@ -9,7 +9,14 @@ time (so historical orders aren't affected by later product price changes).
 all items.
 
 ## Current phase status
-**Phase 5** (Saga Pattern) adds a `SagaState` entity (`saga_state` table,
+**Phase 6** (Transactional Outbox) replaces this service's direct
+`KafkaTemplate.send()` calls with an `outbox_events` table
+(`entity/OutboxEvent.java`) written in the SAME transaction as the domain
+save that triggers the event, plus a `@Scheduled` `event/OutboxPoller.java`
+that reads unpublished rows and actually sends them to Kafka. See "How the
+outbox works now" below.
+
+Phase 5 (Saga Pattern) adds a `SagaState` entity (`saga_state` table,
 one row per orderId) that records the choreography's current step —
 `STARTED`, `PAYMENT_PROCESSED`, `SHIPMENT_CREATED`, `COMPENSATING`,
 `COMPLETED`, `FAILED` — so a saga's overall progress is queryable via
@@ -199,6 +206,37 @@ phase; choreography-only was the chosen scope.
   "updatedAt": "2026-07-15T05:25:37.133Z"
 }
 ```
+
+## How the outbox works now (Phase 6)
+
+`OrderEventProducer` no longer calls `KafkaTemplate` at all. Each
+`publish*()` method now calls `OutboxEventService.enqueue(topic, key,
+event)`, which serializes the event to JSON and saves an `OutboxEvent` row
+(`entity/OutboxEvent.java`, table `outbox_events`) with `publishedAt =
+null`. Because this happens inside the same `@Transactional` method as the
+domain save that triggered it — e.g. `OrderService.create()` saves the
+`Order` and enqueues `OrderCreatedEvent` in one transaction — the two either
+both commit or both roll back. Previously (Phase 3-5) the Kafka send
+happened after the transaction, as a separate step with no such guarantee.
+
+A separate `event/OutboxPoller.java`, `@Scheduled` every 500ms
+(`outbox.poll-interval-ms`), reads up to 50 unpublished rows at a time
+(oldest first), sends each to Kafka via the same `KafkaTemplate` used
+before, and sets `publishedAt` on success. A send that fails is simply left
+unpublished and retried on the next tick — no backoff/DLQ bookkeeping yet
+(Phase 7). The poller parses the stored JSON payload back into a plain
+`Map`, not the original record type, before sending; this produces
+identical wire JSON to sending the record directly, and every consumer
+already deserializes purely from JSON shape
+(`spring.json.use.type.headers: false`), so nothing downstream needed to
+change.
+
+`OrderService`'s own methods (`create`, `markConfirmed`, `markCancelled`)
+didn't need restructuring for this — none of them has a try/catch around a
+domain mutation that continues to publish afterward, so there was no risk
+of the "caught exception poisons the whole transaction" pitfall described
+in [[ARCHITECTURE.md]]'s outbox section (which *did* bite inventory-service
+and payment-service — see their own READMEs).
 
 ## Kafka topics this service produces/consumes
 | Topic | Direction | Payload | Consumer group (this service) |

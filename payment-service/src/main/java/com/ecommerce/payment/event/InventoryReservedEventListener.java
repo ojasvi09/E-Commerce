@@ -1,7 +1,5 @@
 package com.ecommerce.payment.event;
 
-import com.ecommerce.payment.dto.PaymentRequest;
-import com.ecommerce.payment.entity.PaymentStatus;
 import com.ecommerce.payment.service.PaymentService;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -17,6 +15,15 @@ import org.springframework.stereotype.Component;
  *
  * Payment "failure" here is simulated (no real payment gateway integration exists yet,
  * same as Phase 1/2) — this service always succeeds unless persistence itself throws.
+ *
+ * <p>The listener method itself is intentionally NOT @Transactional — see
+ * PaymentService.chargeAndPublish's javadoc and inventory-service's
+ * OrderCreatedEventListener for the full rationale: a shared transaction across both the
+ * charge-and-publish-success path and the catch-and-publish-failure path lets a failure
+ * in the first poison the outbox write in the second, since Spring marks the whole
+ * transaction rollback-only the moment any exception propagates through it, even after
+ * being caught. chargeAndPublish is its own complete transaction; the catch block below
+ * runs with no surrounding transaction, so each publish* call there commits independently.
  */
 @Component
 @RequiredArgsConstructor
@@ -35,9 +42,7 @@ public class InventoryReservedEventListener {
         log.info("Received InventoryReservedEvent for orderId {}, charging {}",
                 event.orderId(), event.totalAmount());
         try {
-            paymentService.create(new PaymentRequest(event.orderId(), event.totalAmount(), PaymentStatus.SUCCESSFUL));
-            eventProducer.publishSuccessful(
-                    new PaymentSuccessfulEvent(event.orderId(), event.userId(), event.totalAmount()));
+            paymentService.chargeAndPublish(event.orderId(), event.userId(), event.totalAmount());
             eventProducer.publishNotificationRequested(new NotificationRequestedEvent(
                     event.orderId(), event.userId(),
                     "Your order #" + event.orderId() + " has been confirmed. Amount charged: " + event.totalAmount()));

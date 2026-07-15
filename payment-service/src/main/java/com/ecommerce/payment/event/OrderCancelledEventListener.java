@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Order Service only publishes OrderCancelledEvent when inventory HAD already been
@@ -16,6 +17,10 @@ import org.springframework.stereotype.Component;
  * to charge it) — see order-service's OrderService.markCancelled. If this service has a
  * SUCCESSFUL payment on file for that order, the charge needs reversing: publish
  * RefundInitiatedEvent (simulated — no real payment gateway, same as charging itself).
+ *
+ * <p>@Transactional (Phase 6) so the outbox row written by eventProducer.publishRefundInitiated
+ * commits atomically — no domain entity is mutated on this path (refund is simulated,
+ * no Payment status change), but the outbox write itself still needs a transaction.
  */
 @Component
 @RequiredArgsConstructor
@@ -26,6 +31,7 @@ public class OrderCancelledEventListener {
     private final PaymentService paymentService;
     private final PaymentEventProducer eventProducer;
 
+    @Transactional
     @KafkaListener(
             topics = KafkaTopics.ORDER_CANCELLED,
             groupId = "payment-service",

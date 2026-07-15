@@ -8,7 +8,17 @@ coupled from Product Service per `plan.md`'s "duplicate DTOs, don't share
 domain models" rule.
 
 ## Current phase status
-**Phase 4** (Event-Driven Workflow): this service now also consumes
+**Phase 6** (Transactional Outbox): `InventoryEventProducer` no longer calls
+Kafka directly — it writes to a new `outbox_events` table
+(`entity/OutboxEvent.java`) instead, published later by a `@Scheduled`
+`event/OutboxPoller.java`. The reserve-then-publish-success path was moved
+into `InventoryService.reserveAllAndPublish()` so the stock decrement and
+the `InventoryReservedEvent` outbox row commit as one transaction — see "How
+the outbox works now" below, including a real bug this surfaced and how it
+was fixed (a naively `@Transactional` listener silently broke the
+reservation-failure path).
+
+Phase 4 (Event-Driven Workflow): this service now also consumes
 `order.cancelled` to release stock it previously reserved (the compensating
 action when payment fails after reservation succeeded — see order-service's
 README), and publishes `NotificationRequestedEvent` alongside
@@ -91,6 +101,41 @@ Errors follow the shared `ApiError` shape.
    unconditionally, no additional check needed. This is the compensating
    action for the case where inventory reservation succeeded but payment
    failed afterward.
+
+## How the outbox works now (Phase 6)
+
+`InventoryEventProducer.publish*()` methods now call
+`OutboxEventService.enqueue(topic, key, event)` instead of
+`KafkaTemplate.send()` directly — see order-service's README for the
+general mechanism (outbox table + `@Scheduled` poller, same pattern in
+every service).
+
+**The one thing that's different here, and why**: the
+`OrderCreatedEvent` listener (`event/OrderCreatedEventListener.onOrderCreated`)
+has a try/reserve/catch/publish-failure shape — `reserveAll()` throws on
+insufficient stock or an unknown product, and the `catch` block publishes
+`InventoryFailedEvent` instead. Marking `onOrderCreated` itself
+`@Transactional` (the first attempt) broke this: once `reserveAll()`
+throws, Spring marks the *entire* transaction rollback-only, and that
+poisons the outbox write for `InventoryFailedEvent` inside the `catch`
+block too, even though the exception never escapes the listener method.
+The result in testing was silent — no exception, no stack trace overflow —
+just the same `OrderCreatedEvent` being redelivered and reprocessed
+indefinitely, because the DB state recording "this failed" never actually
+committed.
+
+The fix: `onOrderCreated` itself is **not** `@Transactional`.
+`InventoryService.reserveAllAndPublish(items, reservedEvent)` is a new
+method that runs `reserveAll()` and `eventProducer.publishReserved()` as one
+atomic transaction (success path only). The listener's `catch` block runs
+with no surrounding transaction at all, so `publishFailed()` and
+`publishNotificationRequested()` each commit independently via
+`OutboxEventService`'s own (non-`@Transactional`, so per-call) save —
+regardless of how the try block's transaction resolved.
+
+`onOrderCancelled` (the stock-release compensating action) doesn't publish
+any event at all, so it keeps its own `@Transactional` safely — there's no
+catch-and-continue-publishing path there to poison.
 
 ## Kafka topics this service produces/consumes
 | Topic | Direction | Payload | Consumer group (this service) |

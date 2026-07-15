@@ -5,11 +5,15 @@ This file is the top-level map of the system. It is meant to be
 system's structure and cross-cutting concerns evolve materially from phase
 to phase per `plan.md`/`project.txt`.
 
-> Last updated: **Phase 5** (Saga Pattern — order-service now records the
-> choreography's progress per order in a new `saga_state` table, queryable
-> via `GET /api/orders/{id}/saga`; no orchestrator, no change to how
-> inventory-service/payment-service behave). Phase 4 added the full domain
-> event set: `OrderCancelled`, `ShipmentCreated`, `NotificationRequested`,
+> Last updated: **Phase 6** (Transactional Outbox — order-service,
+> inventory-service, and payment-service each write every Kafka event they
+> produce to their own `outbox_events` table in the SAME database
+> transaction as the domain write that caused it, instead of calling
+> `KafkaTemplate.send()` directly; a `@Scheduled` `OutboxPoller` in each
+> service reads unpublished rows and does the actual Kafka send). Phase 5
+> added order-service's `saga_state` table, queryable via
+> `GET /api/orders/{id}/saga`. Phase 4 added the full domain event set:
+> `OrderCancelled`, `ShipmentCreated`, `NotificationRequested`,
 > `RefundInitiated` on top of Phase 3's `OrderCreated`/`InventoryReserved`/
 > `InventoryFailed`/`PaymentSuccessful`/`PaymentFailed`.
 > See each service's own `README.md` for full detail — this file only
@@ -102,6 +106,57 @@ this phase). See order-service's own README for the full step semantics,
 including why there's no `INVENTORY_RESERVED` step (order-service never
 observes a positive inventory-reserved signal, only the failure case).
 
+## Transactional outbox (Phase 6)
+
+Every producer in order-service, inventory-service, and payment-service now
+writes to Kafka indirectly, through its own `outbox_events` table, instead
+of calling `KafkaTemplate.send()` inline:
+
+1. A domain method (e.g. `OrderService.create()`, `InventoryService.reserveAllAndPublish()`,
+   `PaymentService.chargeAndPublish()`) does its normal entity save, then
+   calls `<Service>EventProducer.publish*()`, which serializes the event to
+   JSON and inserts an `OutboxEvent` row (`topic`, `event_key`, `payload`,
+   `created_at`, `published_at = null`) — **in the same `@Transactional`
+   method**, so the domain write and the outbox row commit or roll back
+   together. This is the actual guarantee this phase adds: previously (Phase
+   3-5) the Kafka send happened after the transaction, with no such
+   guarantee — a crash between the two could silently lose the event or
+   publish one for a write that got rolled back.
+2. A `@Scheduled` `OutboxPoller` (default every 500ms, `outbox.poll-interval-ms`)
+   in each service polls its own `outbox_events` for unpublished rows
+   (`findTop50ByPublishedAtIsNullOrderByIdAsc`), sends each to Kafka via the
+   same `KafkaTemplate`, and marks `published_at` on success. A row that
+   fails to send is simply retried on the next poll (still `published_at IS
+   NULL`) — there's no separate retry/backoff/DLQ bookkeeping yet, that's
+   Phase 7.
+3. The poller parses the stored JSON payload back into a plain `Map`
+   (not the original event record class) before sending — `JsonSerializer`
+   produces identical wire JSON for a `Map` as for the record, and every
+   consumer already deserializes purely from JSON shape
+   (`spring.json.use.type.headers: false`), ignoring type headers. So this
+   is wire-compatible with every existing `@KafkaListener` unchanged.
+
+**A transaction-boundary pitfall found during Phase 6 testing, and the fix
+applied**: naively marking `@KafkaListener` methods `@Transactional` (so the
+domain write and outbox row commit together) breaks the *catch* branch of
+any listener that does try/reserve-or-charge/catch/publish-failure-event.
+Once the try block's operation throws, Spring marks the **entire**
+transaction rollback-only — even after the exception is caught, any outbox
+row written afterward in that same transaction (e.g. `InventoryFailedEvent`,
+`PaymentFailedEvent`) silently never commits. Worse, no exception escapes
+the listener method, so Spring Kafka doesn't know anything went wrong and
+the message can end up redelivered indefinitely with no visible error
+&mdash; this was caught live (see inventory-service's
+`OrderCreatedEventListener` and payment-service's
+`InventoryReservedEventListener` javadoc for the full story) before being
+fixed. The fix: the listener methods themselves are **not** `@Transactional`.
+The success path's domain-write-plus-outbox-write is its own atomic unit,
+moved into the service layer (`InventoryService.reserveAllAndPublish()`,
+`PaymentService.chargeAndPublish()`); the listener's `catch` block runs with
+no surrounding transaction at all, so each failure-path
+`eventProducer.publish*()` call commits independently, regardless of how
+the try block's transaction resolved.
+
 ## Kafka topics
 
 | Topic | Producer | Consumers | Payload |
@@ -171,14 +226,13 @@ Per `plan.md`/`project.txt`, later phases are expected to add:
 - An orchestrator/coordinator service, for comparison against today's
   choreography-only saga (Phase 5's "optional" bullet, deliberately not
   built this phase) — each service still decides its own compensating
-  action independently; the new `saga_state` table only records progress,
-  it doesn't sequence or coordinate anything
-- Transactional outbox per service so DB writes and event publishing stay
-  atomic (Phase 6) — right now, e.g., Inventory Service's stock reservation
-  and its `inventory.reserved`/`inventory.failed` publish are two separate
-  operations that could in principle diverge if the process crashes between
-  them
-- Retry with backoff + dead-letter topics on consumers (Phase 7)
+  action independently; the `saga_state` table only records progress, it
+  doesn't sequence or coordinate anything
+- Retry with backoff + dead-letter topics on consumers (Phase 7) — the
+  outbox poller added in Phase 6 already retries a failed Kafka *send*
+  indefinitely on each poll tick, but there's no backoff/DLQ for a
+  *consumer*-side failure (e.g. a listener that keeps throwing for a
+  structurally bad message)
 - Idempotency via a `processed_events` table per consumer (Phase 8) — right
   now, a redelivered message (e.g. after a consumer restart mid-processing)
   would be reprocessed with no de-duplication. This is a real gap already:

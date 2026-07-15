@@ -1,49 +1,29 @@
 package com.ecommerce.inventory.event;
 
 import lombok.RequiredArgsConstructor;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 
+/**
+ * Enqueues events onto the transactional outbox (Phase 6) instead of sending to Kafka
+ * directly — see OutboxEventService/OutboxPoller for why. Callers must invoke these
+ * methods from within the same @Transactional method/call chain that made the stock
+ * mutation the event describes, so the outbox row commits atomically with it.
+ */
 @Component
 @RequiredArgsConstructor
 public class InventoryEventProducer {
 
-    private static final Logger log = LoggerFactory.getLogger(InventoryEventProducer.class);
-
-    private final KafkaTemplate<String, Object> kafkaTemplate;
+    private final OutboxEventService outboxEventService;
 
     public void publishReserved(InventoryReservedEvent event) {
-        kafkaTemplate.send(KafkaTopics.INVENTORY_RESERVED, event.orderId().toString(), event)
-                .whenComplete((result, ex) -> {
-                    if (ex != null) {
-                        log.error("Failed to publish InventoryReservedEvent for orderId {}", event.orderId(), ex);
-                    } else {
-                        log.info("Published InventoryReservedEvent for orderId {}", event.orderId());
-                    }
-                });
+        outboxEventService.enqueue(KafkaTopics.INVENTORY_RESERVED, event.orderId().toString(), event);
     }
 
     public void publishFailed(InventoryFailedEvent event) {
-        kafkaTemplate.send(KafkaTopics.INVENTORY_FAILED, event.orderId().toString(), event)
-                .whenComplete((result, ex) -> {
-                    if (ex != null) {
-                        log.error("Failed to publish InventoryFailedEvent for orderId {}", event.orderId(), ex);
-                    } else {
-                        log.info("Published InventoryFailedEvent for orderId {}", event.orderId());
-                    }
-                });
+        outboxEventService.enqueue(KafkaTopics.INVENTORY_FAILED, event.orderId().toString(), event);
     }
 
     public void publishNotificationRequested(NotificationRequestedEvent event) {
-        kafkaTemplate.send(KafkaTopics.NOTIFICATION_REQUESTED, event.orderId().toString(), event)
-                .whenComplete((result, ex) -> {
-                    if (ex != null) {
-                        log.error("Failed to publish NotificationRequestedEvent for orderId {}", event.orderId(), ex);
-                    } else {
-                        log.info("Published NotificationRequestedEvent for orderId {}", event.orderId());
-                    }
-                });
+        outboxEventService.enqueue(KafkaTopics.NOTIFICATION_REQUESTED, event.orderId().toString(), event);
     }
 }

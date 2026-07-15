@@ -4,6 +4,8 @@ import com.ecommerce.inventory.dto.InventoryRequest;
 import com.ecommerce.inventory.dto.InventoryResponse;
 import com.ecommerce.inventory.dto.StockChangeRequest;
 import com.ecommerce.inventory.entity.Inventory;
+import com.ecommerce.inventory.event.InventoryEventProducer;
+import com.ecommerce.inventory.event.InventoryReservedEvent;
 import com.ecommerce.inventory.exception.InsufficientStockException;
 import com.ecommerce.inventory.exception.InventoryAlreadyExistsException;
 import com.ecommerce.inventory.exception.InventoryNotFoundException;
@@ -21,6 +23,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class InventoryService {
 
     private final InventoryRepository inventoryRepository;
+    private final InventoryEventProducer eventProducer;
 
     public InventoryResponse create(InventoryRequest request) {
         if (inventoryRepository.existsByProductId(request.productId())) {
@@ -102,6 +105,21 @@ public class InventoryService {
             }
             throw ex;
         }
+    }
+
+    /**
+     * Reserves stock for every item, then enqueues InventoryReservedEvent in the SAME
+     * database transaction as the stock decrement (Phase 6, transactional outbox) — one
+     * committed unit, so a crash between them can't leave one without the other. Throws
+     * if reservation fails; the caller (OrderCreatedEventListener) is responsible for
+     * enqueueing InventoryFailedEvent in that case, as its own separate transaction — see
+     * the listener's javadoc for why that split matters (a shared @Transactional across
+     * both branches would let reserveAll()'s failure poison the failure-outcome outbox
+     * write too).
+     */
+    public void reserveAllAndPublish(List<StockChangeRequest> items, InventoryReservedEvent reservedEvent) {
+        reserveAll(items);
+        eventProducer.publishReserved(reservedEvent);
     }
 
     private Inventory getOrThrow(Long id) {

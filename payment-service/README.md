@@ -7,7 +7,17 @@ payment. Does not process real payments in Phase 1 — status is set directly
 by the caller (no payment gateway integration yet).
 
 ## Current phase status
-**Phase 4** (Event-Driven Workflow): this service now also consumes
+**Phase 6** (Transactional Outbox): `PaymentEventProducer` no longer calls
+Kafka directly — it writes to a new `outbox_events` table
+(`entity/OutboxEvent.java`) instead, published later by a `@Scheduled`
+`event/OutboxPoller.java`. The charge-then-publish-success path was moved
+into `PaymentService.chargeAndPublish()` so the `Payment` save and the
+`PaymentSuccessfulEvent` outbox row commit as one transaction — same
+transaction-boundary pitfall (and fix) as inventory-service; see
+`event/InventoryReservedEventListener`'s javadoc, or inventory-service's
+README, for the full story.
+
+Phase 4 (Event-Driven Workflow): this service now also consumes
 `order.cancelled` — if it finds a `SUCCESSFUL` payment on file for that
 order, it publishes `RefundInitiatedEvent` (simulated refund, same "no real
 gateway" caveat as charging itself). It also publishes
@@ -83,6 +93,33 @@ publishes `RefundInitiatedEvent` (orderId, userId, amount, reason) to
 `refund.initiated` — a compensating action, simulated the same way charging
 itself is. If no successful payment is found (e.g. the cancellation came
 from `payment.failed` itself), does nothing — there's nothing to refund.
+
+## How the outbox works now (Phase 6)
+
+`PaymentEventProducer.publish*()` methods now call
+`OutboxEventService.enqueue(topic, key, event)` instead of
+`KafkaTemplate.send()` directly — see order-service's README for the
+general outbox mechanism (same pattern in every service: outbox table +
+`@Scheduled` poller).
+
+**Same transaction-boundary pitfall as inventory-service, same fix**: the
+`InventoryReservedEvent` listener (`event/InventoryReservedEventListener.onInventoryReserved`)
+has a try/charge/catch/publish-failure shape. Marking the listener method
+itself `@Transactional` broke the catch branch — a charge failure marks the
+whole transaction rollback-only, silently discarding the
+`PaymentFailedEvent` outbox write even though the exception was caught and
+never escaped the listener. The fix: the listener method is **not**
+`@Transactional`. `PaymentService.chargeAndPublish(orderId, userId, amount)`
+runs the `Payment` save and `eventProducer.publishSuccessful()` as one
+atomic transaction (success path only); the listener's `catch` block runs
+with no surrounding transaction, so `publishFailed()`/
+`publishNotificationRequested()` each commit independently regardless of
+how the try block's transaction resolved.
+
+`OrderCancelledEventListener` (the refund-on-cancellation path) keeps its
+own `@Transactional` safely — it only does a read (`findByOrderId`) with no
+`orElseThrow`, so there's no failure branch there that could poison the
+transaction before the `RefundInitiatedEvent` outbox write.
 
 ## Kafka topics this service produces/consumes
 | Topic | Direction | Payload | Consumer group (this service) |

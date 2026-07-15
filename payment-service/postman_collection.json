@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "Payment Service",
-    "description": "CRUD requests for payment-service (Phase 1). Set base_url to the gateway (http://localhost:8080) if you want to go through the API Gateway instead of hitting the service directly.",
+    "description": "CRUD requests for payment-service (Phase 1). None of these endpoints changed in Phase 6 — the transactional outbox only affects the Kafka events this service publishes as a side effect of consuming inventory.reserved/order.cancelled (see README's 'How the outbox works now'), not these direct REST calls. Set base_url to the gateway (http://localhost:8080) if you want to go through the API Gateway instead of hitting the service directly.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
