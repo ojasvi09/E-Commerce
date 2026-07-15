@@ -2,6 +2,7 @@ package com.ecommerce.order.controller;
 
 import com.ecommerce.order.dto.OrderRequest;
 import com.ecommerce.order.dto.OrderResponse;
+import com.ecommerce.order.dto.SagaStateResponse;
 import com.ecommerce.order.service.OrderService;
 import jakarta.validation.Valid;
 import java.net.URI;
@@ -38,6 +39,11 @@ public class OrderController {
     @GetMapping("/{id}")
     public OrderResponse findById(@PathVariable Long id) {
         return orderService.findById(id);
+    }
+
+    @GetMapping("/{id}/saga")
+    public SagaStateResponse findSagaState(@PathVariable Long id) {
+        return orderService.findSagaState(id);
     }
 
     @PutMapping("/{id}")

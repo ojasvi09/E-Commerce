@@ -44,6 +44,14 @@
       }
     },
     {
+      "name": "4. Get Saga State By Order Id (Phase 5)",
+      "request": {
+        "method": "GET",
+        "url": { "raw": "{{base_url}}/api/orders/{{order_id}}/saga", "host": [ "{{base_url}}" ], "path": [ "api", "orders", "{{order_id}}", "saga" ] },
+        "description": "Returns the saga's current step for this order: STARTED, PAYMENT_PROCESSED, SHIPMENT_CREATED, COMPENSATING, COMPLETED, or FAILED (plus a reason on COMPENSATING/FAILED). This is choreography-only bookkeeping recorded by order-service as it observes inventory.failed/payment.successful/payment.failed — no orchestrator exists. 404 if no order was ever created with this id (saga state is created at the same time as the order)."
+      }
+    },
+    {
       "name": "Get All Orders",
       "request": {
         "method": "GET",

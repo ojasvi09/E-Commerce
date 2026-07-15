@@ -9,7 +9,16 @@ time (so historical orders aren't affected by later product price changes).
 all items.
 
 ## Current phase status
-**Phase 4** (Event-Driven Workflow) extends Phase 3's chain with two new
+**Phase 5** (Saga Pattern) adds a `SagaState` entity (`saga_state` table,
+one row per orderId) that records the choreography's current step —
+`STARTED`, `PAYMENT_PROCESSED`, `SHIPMENT_CREATED`, `COMPENSATING`,
+`COMPLETED`, `FAILED` — so a saga's overall progress is queryable via
+`GET /api/orders/{id}/saga` instead of only inferable by cross-referencing
+Order/Inventory/Payment records separately. This is choreography-only (no
+orchestrator service) — see "How the saga is tracked now" below for why and
+what it does/doesn't cover.
+
+Phase 4 (Event-Driven Workflow) extends Phase 3's chain with two new
 events this service produces: `OrderCancelledEvent` (published only when
 inventory had already been reserved for the order, so Inventory Service can
 release it — see "How order placement works now" below) and
@@ -66,6 +75,7 @@ Base path: `/api/orders` (direct) or via gateway on port `8080`.
 | POST | `/api/orders` | `OrderRequest` | 201 + `OrderResponse` |
 | GET | `/api/orders` | – | 200 + `List<OrderResponse>` |
 | GET | `/api/orders/{id}` | – | 200 + `OrderResponse` / 404 |
+| GET | `/api/orders/{id}/saga` | – | 200 + `SagaStateResponse` / 404 (Phase 5) |
 | PUT | `/api/orders/{id}` | `OrderRequest` | 200 + `OrderResponse` / 404 (replaces item list) |
 | DELETE | `/api/orders/{id}` | – | 204 / 404 |
 
@@ -143,11 +153,52 @@ Downstream, asynchronously:
    decided the user needs telling something — it no longer listens to the
    raw outcome events directly (see notification-service's README).
 
-This is deliberately **not yet a formal saga** with a coordinator — that's
-Phase 5's scope. Phase 4 is choreography-style: each service reacts to the
+Phase 4 established this as choreography-style: each service reacts to the
 events relevant to it and decides its own compensating action
 (Inventory releases stock, Payment refunds) without any central
 orchestrator directing the sequence.
+
+## How the saga is tracked now (Phase 5)
+
+Phase 5 formalizes the above choreography by recording it as a named saga,
+without adding an orchestrator or changing how inventory-service/
+payment-service behave at all — this is purely an observability layer on
+top of Phase 4's existing event flow, built in `service/SagaStateService.java`:
+
+- `OrderService.create()` calls `sagaStateService.start(orderId)` right
+  after publishing `OrderCreatedEvent` → step `STARTED`.
+- `OrderEventListener.onPaymentSuccessful()` (via `markConfirmed`) advances
+  through `PAYMENT_PROCESSED` → `SHIPMENT_CREATED` → `COMPLETED`.
+- `OrderEventListener.onPaymentFailed()` (via `markCancelled(..., releaseInventory=true)`)
+  advances to `COMPENSATING` (inventory release / possible refund about to
+  happen downstream) then `FAILED` — order-service isn't notified when the
+  compensating actions themselves finish, so `FAILED` here means "this
+  service's own work in the saga is done," not "the entire saga, including
+  downstream compensation, has physically completed."
+- `OrderEventListener.onInventoryFailed()` (via `markCancelled(..., releaseInventory=false)`)
+  advances straight to `FAILED` — nothing was reserved, so there's no
+  compensating step to run.
+
+There is deliberately **no `INVENTORY_RESERVED` step**: order-service never
+consumes a positive "inventory reserved" event (only `inventory.failed`, on
+the failure path), so it has no way to observe that transition — inventory-
+service's own stock records are the source of truth for that step. This
+saga view is scoped to what order-service itself can see.
+
+Still **no orchestrator/coordinator** — each service continues to decide its
+own compensating action independently, exactly as in Phase 4. An
+orchestrator (Phase 5's "optional" bullet) was deliberately not built this
+phase; choreography-only was the chosen scope.
+
+`SagaStateResponse`:
+```json
+{
+  "orderId": 16,
+  "currentStep": "COMPENSATING",
+  "reason": "Payment failed: simulated gateway timeout",
+  "updatedAt": "2026-07-15T05:25:37.133Z"
+}
+```
 
 ## Kafka topics this service produces/consumes
 | Topic | Direction | Payload | Consumer group (this service) |

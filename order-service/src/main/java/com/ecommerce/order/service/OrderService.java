@@ -4,9 +4,11 @@ import com.ecommerce.order.dto.OrderItemRequest;
 import com.ecommerce.order.dto.OrderItemResponse;
 import com.ecommerce.order.dto.OrderRequest;
 import com.ecommerce.order.dto.OrderResponse;
+import com.ecommerce.order.dto.SagaStateResponse;
 import com.ecommerce.order.entity.Order;
 import com.ecommerce.order.entity.OrderItem;
 import com.ecommerce.order.entity.OrderStatus;
+import com.ecommerce.order.entity.SagaStep;
 import com.ecommerce.order.entity.Shipment;
 import com.ecommerce.order.event.OrderCancelledEvent;
 import com.ecommerce.order.event.OrderCreatedEvent;
@@ -33,6 +35,7 @@ public class OrderService {
     private final OrderRepository orderRepository;
     private final ShipmentRepository shipmentRepository;
     private final OrderEventProducer orderEventProducer;
+    private final SagaStateService sagaStateService;
 
     /**
      * Persists the order as CREATED and publishes OrderCreatedEvent, then returns
@@ -50,6 +53,7 @@ public class OrderService {
                 .toList();
         orderEventProducer.publishOrderCreated(
                 new OrderCreatedEvent(saved.getId(), saved.getUserId(), saved.getTotalAmount(), items));
+        sagaStateService.start(saved.getId());
 
         return toResponse(saved);
     }
@@ -65,10 +69,13 @@ public class OrderService {
         Order order = getOrThrow(orderId);
         order.setStatus(OrderStatus.CONFIRMED);
         log.info("Order {} confirmed", orderId);
+        sagaStateService.advance(orderId, SagaStep.PAYMENT_PROCESSED, null);
 
         Shipment shipment = shipmentRepository.save(Shipment.builder().orderId(orderId).build());
         orderEventProducer.publishShipmentCreated(
                 new ShipmentCreatedEvent(orderId, order.getUserId(), shipment.getId()));
+        sagaStateService.advance(orderId, SagaStep.SHIPMENT_CREATED, null);
+        sagaStateService.advance(orderId, SagaStep.COMPLETED, null);
     }
 
     /**
@@ -86,12 +93,19 @@ public class OrderService {
         log.info("Order {} cancelled: {}", orderId, reason);
 
         if (releaseInventory) {
+            // Inventory/payment compensation is about to run downstream (stock release,
+            // possible refund) — COMPENSATING reflects that the saga isn't done yet even
+            // though this service's own work is; FAILED is the terminal state once nothing
+            // further will happen, so we still record it here since order-service isn't
+            // notified when the compensating actions themselves finish.
+            sagaStateService.advance(orderId, SagaStep.COMPENSATING, reason);
             List<OrderCreatedEvent.Item> items = order.getItems().stream()
                     .map(i -> new OrderCreatedEvent.Item(i.getProductId(), i.getQuantity(), i.getPrice()))
                     .toList();
             orderEventProducer.publishOrderCancelled(
                     new OrderCancelledEvent(orderId, order.getUserId(), reason, items));
         }
+        sagaStateService.advance(orderId, SagaStep.FAILED, reason);
     }
 
     private Order buildOrder(OrderRequest request) {
@@ -123,6 +137,11 @@ public class OrderService {
     @Transactional(readOnly = true)
     public OrderResponse findById(Long id) {
         return toResponse(getOrThrow(id));
+    }
+
+    @Transactional(readOnly = true)
+    public SagaStateResponse findSagaState(Long id) {
+        return sagaStateService.findByOrderId(id);
     }
 
     public OrderResponse update(Long id, OrderRequest request) {

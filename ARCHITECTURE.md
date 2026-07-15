@@ -2,13 +2,16 @@
 
 This file is the top-level map of the system. It is meant to be
 **regenerated/updated at the end of every phase** in `plan.md`, since the
-communication pattern between services (currently plain REST) is expected to
-change materially once Kafka is introduced (Phase 5+ per `plan.md`/`project.txt`).
+system's structure and cross-cutting concerns evolve materially from phase
+to phase per `plan.md`/`project.txt`.
 
-> Last updated: **Phase 4** (Event-Driven Workflow — full domain event set:
-> `OrderCancelled`, `ShipmentCreated`, `NotificationRequested`,
-> `RefundInitiated` added on top of Phase 3's `OrderCreated`/
-> `InventoryReserved`/`InventoryFailed`/`PaymentSuccessful`/`PaymentFailed`).
+> Last updated: **Phase 5** (Saga Pattern — order-service now records the
+> choreography's progress per order in a new `saga_state` table, queryable
+> via `GET /api/orders/{id}/saga`; no orchestrator, no change to how
+> inventory-service/payment-service behave). Phase 4 added the full domain
+> event set: `OrderCancelled`, `ShipmentCreated`, `NotificationRequested`,
+> `RefundInitiated` on top of Phase 3's `OrderCreated`/`InventoryReserved`/
+> `InventoryFailed`/`PaymentSuccessful`/`PaymentFailed`.
 > See each service's own `README.md` for full detail — this file only
 > summarizes and cross-links.
 
@@ -84,9 +87,20 @@ every earlier phase.
    telling something. It no longer listens to raw domain events directly —
    see notification-service's README for why.
 
-Still not a formal saga with a coordinator (that's Phase 5's scope) — this
-is choreography: each service reacts to events relevant to it and decides
-its own compensating action independently.
+This is still choreography, not orchestration: each service reacts to
+events relevant to it and decides its own compensating action
+independently. Phase 5 formalizes this choreography as a named saga by
+having **order-service** record the sequence's progress in a `saga_state`
+table (one row per orderId, steps: `STARTED` → `PAYMENT_PROCESSED` →
+`SHIPMENT_CREATED` → `COMPLETED` on the success path, or `STARTED` →
+`COMPENSATING` → `FAILED` on the payment-failure path, or straight to
+`FAILED` on the inventory-failure path since nothing was reserved) —
+queryable via `GET /api/orders/{id}/saga`. This is a pure observability
+layer: it doesn't sequence or coordinate anything, and no orchestrator
+service was added (that remains optional per `plan.md` and was not built
+this phase). See order-service's own README for the full step semantics,
+including why there's no `INVENTORY_RESERVED` step (order-service never
+observes a positive inventory-reserved signal, only the failure case).
 
 ## Kafka topics
 
@@ -154,10 +168,11 @@ now has two distinct forms:
 ## Planned evolution (do not implement yet — tracked here for context only)
 
 Per `plan.md`/`project.txt`, later phases are expected to add:
-- A formal saga with an orchestrator/coordinator, for comparison against
-  today's choreography-only approach (Phase 5) — right now each service
-  decides its own compensating action independently; nothing sequences or
-  tracks the saga as a whole
+- An orchestrator/coordinator service, for comparison against today's
+  choreography-only saga (Phase 5's "optional" bullet, deliberately not
+  built this phase) — each service still decides its own compensating
+  action independently; the new `saga_state` table only records progress,
+  it doesn't sequence or coordinate anything
 - Transactional outbox per service so DB writes and event publishing stay
   atomic (Phase 6) — right now, e.g., Inventory Service's stock reservation
   and its `inventory.reserved`/`inventory.failed` publish are two separate
