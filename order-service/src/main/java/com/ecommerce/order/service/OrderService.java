@@ -1,7 +1,5 @@
 package com.ecommerce.order.service;
 
-import com.ecommerce.order.client.FulfillmentClient;
-import com.ecommerce.order.client.OrderFulfillmentException;
 import com.ecommerce.order.dto.OrderItemRequest;
 import com.ecommerce.order.dto.OrderItemResponse;
 import com.ecommerce.order.dto.OrderRequest;
@@ -9,10 +7,11 @@ import com.ecommerce.order.dto.OrderResponse;
 import com.ecommerce.order.entity.Order;
 import com.ecommerce.order.entity.OrderItem;
 import com.ecommerce.order.entity.OrderStatus;
+import com.ecommerce.order.event.OrderCreatedEvent;
+import com.ecommerce.order.event.OrderEventProducer;
 import com.ecommerce.order.exception.OrderNotFoundException;
 import com.ecommerce.order.repository.OrderRepository;
 import java.math.BigDecimal;
-import java.util.ArrayList;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -28,44 +27,40 @@ public class OrderService {
     private static final Logger log = LoggerFactory.getLogger(OrderService.class);
 
     private final OrderRepository orderRepository;
-    private final FulfillmentClient fulfillmentClient;
-    private final OrderPersister orderPersister;
+    private final OrderEventProducer orderEventProducer;
 
+    /**
+     * Persists the order as CREATED and publishes OrderCreatedEvent, then returns
+     * immediately — this is now asynchronous (Phase 3). Inventory/Payment consume the
+     * event downstream and the order transitions to CONFIRMED or CANCELLED later, via
+     * the Kafka listeners in this class. Callers must poll GET /api/orders/{id} to see
+     * the final outcome; the HTTP response here is not the final word.
+     */
     public OrderResponse create(OrderRequest request) {
         Order order = buildOrder(request);
-        BigDecimal total = order.getTotalAmount();
+        Order saved = orderRepository.save(order);
 
-        // Persist first (own transaction) so the order has an id before we call Payment
-        // Service, which requires a non-null orderId. This also means the CREATED row
-        // already exists if the fulfillment step below fails partway through.
-        order = orderPersister.saveInNewTransaction(order);
+        List<OrderCreatedEvent.Item> items = request.items().stream()
+                .map(i -> new OrderCreatedEvent.Item(i.productId(), i.quantity(), i.price()))
+                .toList();
+        orderEventProducer.publishOrderCreated(
+                new OrderCreatedEvent(saved.getId(), saved.getUserId(), saved.getTotalAmount(), items));
 
-        // Reserve stock for every line item first, then charge payment for the total.
-        // If anything fails, release whatever was already reserved for this order
-        // (compensating action) and persist the order as CANCELLED instead of CONFIRMED.
-        List<OrderItemRequest> reserved = new ArrayList<>();
-        try {
-            for (OrderItemRequest itemRequest : request.items()) {
-                fulfillmentClient.reserveStock(itemRequest.productId(), itemRequest.quantity());
-                reserved.add(itemRequest);
-            }
-            fulfillmentClient.charge(order.getId(), total);
-            order.setStatus(OrderStatus.CONFIRMED);
-            return toResponse(orderPersister.saveInNewTransaction(order));
-        } catch (OrderFulfillmentException ex) {
-            log.error("Order fulfillment failed for orderId {}, releasing {} reserved item(s) and cancelling",
-                    order.getId(), reserved.size(), ex);
-            for (OrderItemRequest itemRequest : reserved) {
-                try {
-                    fulfillmentClient.releaseStock(itemRequest.productId(), itemRequest.quantity());
-                } catch (OrderFulfillmentException releaseEx) {
-                    log.error("Failed to release stock for productId {} during rollback",
-                            itemRequest.productId(), releaseEx);
-                }
-            }
-            order.setStatus(OrderStatus.CANCELLED);
-            return toResponse(orderPersister.saveInNewTransaction(order));
-        }
+        return toResponse(saved);
+    }
+
+    /** Called by PaymentSuccessfulListener once payment for this order has succeeded. */
+    public void markConfirmed(Long orderId) {
+        Order order = getOrThrow(orderId);
+        order.setStatus(OrderStatus.CONFIRMED);
+        log.info("Order {} confirmed", orderId);
+    }
+
+    /** Called by InventoryFailedListener/PaymentFailedListener when fulfillment fails downstream. */
+    public void markCancelled(Long orderId, String reason) {
+        Order order = getOrThrow(orderId);
+        order.setStatus(OrderStatus.CANCELLED);
+        log.info("Order {} cancelled: {}", orderId, reason);
     }
 
     private Order buildOrder(OrderRequest request) {

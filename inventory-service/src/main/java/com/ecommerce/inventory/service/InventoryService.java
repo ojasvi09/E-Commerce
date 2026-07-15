@@ -9,6 +9,7 @@ import com.ecommerce.inventory.exception.InventoryAlreadyExistsException;
 import com.ecommerce.inventory.exception.InventoryNotFoundException;
 import com.ecommerce.inventory.exception.InventoryNotFoundForProductException;
 import com.ecommerce.inventory.repository.InventoryRepository;
+import java.util.ArrayList;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -78,6 +79,29 @@ public class InventoryService {
                 .orElseThrow(() -> new InventoryNotFoundForProductException(request.productId()));
         inventory.setQuantity(inventory.getQuantity() + request.quantity());
         return toResponse(inventory);
+    }
+
+    /**
+     * Reserves stock for every item in one call, all-or-nothing: if any item can't be
+     * reserved (not found or insufficient stock), every item already reserved in this
+     * call is released before the exception propagates, so a partially-fulfilled order
+     * never leaves inventory partially decremented. Used by the OrderCreatedEvent
+     * listener (Phase 3) — the same all-or-nothing guarantee Order Service used to
+     * provide itself via try/catch in Phase 2, now living where the reservation happens.
+     */
+    public void reserveAll(List<StockChangeRequest> items) {
+        List<StockChangeRequest> reserved = new ArrayList<>();
+        try {
+            for (StockChangeRequest item : items) {
+                reserve(item);
+                reserved.add(item);
+            }
+        } catch (RuntimeException ex) {
+            for (StockChangeRequest item : reserved) {
+                release(item);
+            }
+            throw ex;
+        }
     }
 
     private Inventory getOrThrow(Long id) {

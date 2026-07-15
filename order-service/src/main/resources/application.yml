@@ -23,89 +23,36 @@ spring:
     # Logs every generated SQL statement to the console — useful while
     # developing, noisy in production.
     show-sql: true
-  cloud:
-    openfeign:
-      client:
-        config:
-          # "default" applies to every @FeignClient unless overridden by a
-          # client-specific block keyed by that client's `name` (we don't
-          # override per-client here, both inventory/payment share this).
-          default:
-            # Max time (ms) to establish the TCP connection to the target
-            # service before giving up.
-            connectTimeout: 2000
-            # Max time (ms) to wait for the response body once connected.
-            # If either timeout is hit, Resilience4j's retry (below) kicks in.
-            readTimeout: 3000
-
-# Hardcoded base URLs for the services order-service calls directly over
-# HTTP (Phase 2: reserve/release stock, charge payment). There is no service
-# registry (Eureka/Consul) yet, so this is the entire "discovery" mechanism
-# — same static-config pattern the API Gateway uses for its own routes.
-# Consumed by @FeignClient(url = "${services.xxx.url}") in client/InventoryClient.java
-# and client/PaymentClient.java.
-services:
-  inventory:
-    url: http://localhost:8083
-  payment:
-    url: http://localhost:8085
-
-# Resilience4j config for the two outbound Feign calls. Each block is keyed
-# by the instance name passed to @Retry(name = "...") / @CircuitBreaker(name = "...")
-# in client/FulfillmentClient.java — "inventory" and "payment" here must match
-# those annotation values exactly, or the defaults apply instead silently.
-resilience4j:
-  retry:
-    instances:
-      inventory:
-        # Retry a failed call up to 3 times total (1 original + 2 retries).
-        max-attempts: 3
-        # Wait 300ms between attempts (fixed backoff, no jitter/exponential
-        # growth configured here).
-        wait-duration: 300ms
-        # Only retry on transport-level failures (timeouts, connection
-        # refused/reset). Deliberately NOT retried: 4xx business errors like
-        # "insufficient stock" (409) — those fail fast, retrying wouldn't help.
-        retry-exceptions:
-          - java.io.IOException
-          - feign.RetryableException
-      payment:
-        max-attempts: 3
-        wait-duration: 300ms
-        retry-exceptions:
-          - java.io.IOException
-          - feign.RetryableException
-  circuitbreaker:
-    instances:
-      inventory:
-        # Circuit breaker looks at the last 10 calls to decide open/closed.
-        sliding-window-size: 10
-        # If >= 50% of those 10 calls failed, the circuit trips to OPEN —
-        # further calls fail immediately (via the fallback method) without
-        # even attempting the network call, protecting a struggling downstream
-        # service from more load.
-        failure-rate-threshold: 50
-        # Once OPEN, stay open for 10s before allowing any calls through again.
-        wait-duration-in-open-state: 10s
-        # After the wait, allow 3 trial calls through (HALF_OPEN state) to
-        # test if the downstream service has recovered before fully closing.
-        permitted-number-of-calls-in-half-open-state: 3
-      payment:
-        sliding-window-size: 10
-        failure-rate-threshold: 50
-        wait-duration-in-open-state: 10s
-        permitted-number-of-calls-in-half-open-state: 3
+  kafka:
+    # Address of the Kafka broker started by docker-compose.yml (KAFKA_ADVERTISED_LISTENERS).
+    bootstrap-servers: localhost:9092
+    producer:
+      # Serialize the record key as a plain String (we key by orderId.toString()) and
+      # the value as JSON (event record -> JSON object) via Spring Kafka's JsonSerializer.
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+    consumer:
+      # order-service's single consumer group for all the topics it listens to
+      # (inventory.failed, payment.successful, payment.failed). Kafka guarantees each
+      # partition is only read by one consumer instance within a group — this is what
+      # "explicit consumer groups" in the phase 3 goal refers to.
+      group-id: order-service
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: com.ecommerce.order.event
+        # Don't rely on the producer's __TypeId__ header (which would point at the
+        # PRODUCING service's package, e.g. com.ecommerce.payment.event.PaymentSuccessfulEvent
+        # in payment-service) — deserialize straight into this service's own local copy
+        # of the event class instead. This is what keeps services loosely coupled: each
+        # side owns its own event DTOs and only agrees on the JSON shape, not the class.
+        spring.json.use.type.headers: false
+      # Start reading from the beginning of a topic if this consumer group has never
+      # committed an offset before (e.g. first run against a fresh topic).
+      auto-offset-reset: earliest
 
 management:
   endpoints:
     web:
       exposure:
-        # health/info as usual, plus circuitbreakers/retries so you can
-        # inspect live resilience state at runtime, e.g.
-        # GET /actuator/circuitbreakers or GET /actuator/retries.
-        include: health,info,circuitbreakers,retries
-  health:
-    circuitbreakers:
-      # Folds each circuit breaker's current state (CLOSED/OPEN/HALF_OPEN)
-      # into the overall GET /actuator/health response.
-      enabled: true
+        include: health,info

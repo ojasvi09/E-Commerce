@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "Order Service",
-    "description": "CRUD requests for order-service. As of Phase 2, Create Order synchronously reserves stock in inventory-service and charges payment-service before responding — check the 'status' field in the response ('CONFIRMED' vs 'CANCELLED'), not just the HTTP code. Set base_url to the gateway (http://localhost:8080) if you want to go through the API Gateway instead of hitting the service directly.",
+    "description": "CRUD requests for order-service. As of Phase 3, Create Order is ASYNCHRONOUS: it publishes an OrderCreatedEvent to Kafka and returns immediately with status CREATED — it does NOT reserve stock or charge payment inline anymore. Run 'Get Order By Id' a moment after creating to see it settle into CONFIRMED or CANCELLED once inventory-service/payment-service/Kafka have processed the event. Set base_url to the gateway (http://localhost:8080) if you want to go through the API Gateway instead of hitting the service directly.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -10,7 +10,7 @@
   ],
   "item": [
     {
-      "name": "Create Order (success path - use a productId with enough stock)",
+      "name": "1. Create Order (success path - use a productId with enough stock)",
       "request": {
         "method": "POST",
         "header": [ { "key": "Content-Type", "value": "application/json" } ],
@@ -19,11 +19,11 @@
           "raw": "{\n  \"userId\": 1,\n  \"items\": [\n    { \"productId\": 1, \"quantity\": 2, \"price\": 19.99 },\n    { \"productId\": 2, \"quantity\": 1, \"price\": 49.50 }\n  ]\n}"
         },
         "url": { "raw": "{{base_url}}/api/orders", "host": [ "{{base_url}}" ], "path": [ "api", "orders" ] },
-        "description": "Reserves stock for each item then charges payment. Response status field will be CONFIRMED if both succeed."
+        "description": "Publishes OrderCreatedEvent and returns immediately with status CREATED. Note the response 'id' field and use it (or set {{order_id}}) for the 'Get Order By Id' request below to watch it become CONFIRMED."
       }
     },
     {
-      "name": "Create Order (failure path - request more than available stock)",
+      "name": "2. Create Order (failure path - request more than available stock)",
       "request": {
         "method": "POST",
         "header": [ { "key": "Content-Type", "value": "application/json" } ],
@@ -32,7 +32,14 @@
           "raw": "{\n  \"userId\": 1,\n  \"items\": [\n    { \"productId\": 1, \"quantity\": 999999, \"price\": 19.99 }\n  ]\n}"
         },
         "url": { "raw": "{{base_url}}/api/orders", "host": [ "{{base_url}}" ], "path": [ "api", "orders" ] },
-        "description": "Requests far more stock than exists, so inventory reservation fails with 409 Insufficient Stock. Order Service catches this, releases any already-reserved items, and persists the order as CANCELLED. Response is still 201 - check status field."
+        "description": "Requests far more stock than exists. Response is still 201 with status CREATED immediately. A moment later, inventory-service's Kafka listener fails to reserve stock, publishes inventory.failed, and order-service's listener marks this order CANCELLED — poll 'Get Order By Id' to observe it."
+      }
+    },
+    {
+      "name": "3. Get Order By Id (poll this after Create Order to see CREATED -> CONFIRMED/CANCELLED)",
+      "request": {
+        "method": "GET",
+        "url": { "raw": "{{base_url}}/api/orders/{{order_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "orders", "{{order_id}}" ] }
       }
     },
     {
@@ -40,13 +47,6 @@
       "request": {
         "method": "GET",
         "url": { "raw": "{{base_url}}/api/orders", "host": [ "{{base_url}}" ], "path": [ "api", "orders" ] }
-      }
-    },
-    {
-      "name": "Get Order By Id",
-      "request": {
-        "method": "GET",
-        "url": { "raw": "{{base_url}}/api/orders/{{order_id}}", "host": [ "{{base_url}}" ], "path": [ "api", "orders", "{{order_id}}" ] }
       }
     },
     {

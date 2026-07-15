@@ -123,7 +123,7 @@
       "name": "Orders",
       "item": [
         {
-          "name": "Create Order",
+          "name": "Create Order (async as of Phase 3 - returns CREATED, poll Get Order By Id for final status)",
           "request": {
             "method": "POST",
             "header": [ { "key": "Content-Type", "value": "application/json" } ],

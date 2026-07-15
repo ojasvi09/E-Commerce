@@ -1,6 +1,7 @@
 # Port this service listens on. The API Gateway routes /api/inventory/**
-# here, and order-service's InventoryClient (Feign) calls this port directly
-# for /api/inventory/reserve and /api/inventory/release (Phase 2).
+# here. As of Phase 3, reserve/release are triggered by Kafka events
+# (order.created) rather than direct HTTP calls from order-service — the
+# REST endpoints still exist for manual testing/CRUD via Postman.
 server:
   port: 8083
 
@@ -25,6 +26,25 @@ spring:
     # Logs every generated SQL statement to the console — useful while
     # developing, noisy in production.
     show-sql: true
+  kafka:
+    bootstrap-servers: localhost:9092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+    consumer:
+      # This service's own consumer group, separate from order-service's and
+      # payment-service's — each service reads order.created independently.
+      group-id: inventory-service
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: com.ecommerce.inventory.event
+        # Deserialize into this service's own local OrderCreatedEvent copy, not
+        # whatever package order-service's producer used (see order-service's
+        # application.yml for the fuller explanation of why).
+        spring.json.value.default.type: com.ecommerce.inventory.event.OrderCreatedEvent
+        spring.json.use.type.headers: false
+      auto-offset-reset: earliest
 
 management:
   endpoints:

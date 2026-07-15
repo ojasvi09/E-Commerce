@@ -9,17 +9,24 @@ time (so historical orders aren't affected by later product price changes).
 all items.
 
 ## Current phase status
-**Phase 2** (Synchronous Communication) added: placing an order now
-synchronously reserves stock in Inventory Service and charges Payment
-Service via OpenFeign, with Resilience4j retries + a circuit breaker on both
-calls. No Kafka events yet — that's Phase 3+.
+**Phase 3** (Kafka Integration) replaced Phase 2's synchronous OpenFeign
+calls entirely: placing an order now publishes an event and returns
+immediately with status `CREATED`. Inventory/Payment/Notification react to
+that event asynchronously via Kafka, and this service listens for their
+outcomes to update the order's final status. There is no more direct HTTP
+call from Order Service to Inventory or Payment — see "How order placement
+works now" below.
 
 Phase 1 baseline: CRUD REST API + Postgres persistence.
+Phase 2 (superseded): synchronous OpenFeign + Resilience4j — removed in
+Phase 3, kept here in history only as context for why some patterns exist
+(e.g. `OrderStatus.CREATED` as a real, now much more visible, intermediate
+state).
 
 ## Tech
 - Spring Boot 3.3.4, Spring Data JPA, Bean Validation
-- Spring Cloud OpenFeign (declarative HTTP clients) + Resilience4j
-  (`spring-cloud-starter-circuitbreaker-resilience4j`)
+- Spring Kafka (`spring-kafka`) — producer for `order.created`, consumer for
+  `inventory.failed` / `payment.successful` / `payment.failed`
 - Database: PostgreSQL, schema `orderdb` (own database)
 - Port: `8084`
 - `Order` 1:N `OrderItem` via JPA `@OneToMany(cascade = ALL, orphanRemoval = true)`
@@ -62,7 +69,8 @@ Base path: `/api/orders` (direct) or via gateway on port `8080`.
   ]
 }
 ```
-`OrderResponse`:
+`OrderResponse` — **note the status is now always `CREATED` immediately
+after `POST`**, not `CONFIRMED`/`CANCELLED` like Phase 2:
 ```json
 {
   "id": 1,
@@ -74,61 +82,76 @@ Base path: `/api/orders` (direct) or via gateway on port `8080`.
   ]
 }
 ```
+Poll `GET /api/orders/{id}` afterward to observe it transition to
+`CONFIRMED` or `CANCELLED` once the async chain finishes (typically well
+under a second locally, but there is no guaranteed latency — that's the
+nature of eventual consistency).
 
 Errors follow the shared `ApiError` shape.
 - 404 when order id not found
 - 400 with field-level `details` on validation failure (e.g., empty `items`)
 
-## How order placement actually works now (Phase 2)
+## How order placement actually works now (Phase 3)
 
 `OrderService.create()`:
-1. Builds the `Order` + `OrderItem`s and persists it immediately as
-   `CREATED` (via `OrderPersister`, its own transaction) so it has an id
-   before any downstream call — Payment Service requires a non-null
-   `orderId`.
-2. For each item, calls `InventoryClient.reserve(productId, quantity)`
-   (`POST http://localhost:8083/api/inventory/reserve`) to decrement stock.
-   Each successfully reserved item is tracked so it can be rolled back.
-3. If all reservations succeed, calls `PaymentClient.charge(orderId, total)`
-   (`POST http://localhost:8085/api/payments`) to create a `SUCCESSFUL`
-   payment record.
-4. If every step succeeds: order status becomes `CONFIRMED`.
-5. If any step fails (insufficient stock, payment rejected, timeout, or
-   circuit breaker open): every item reserved so far is released via
-   `InventoryClient.release(...)` (compensating action, best-effort — a
-   release failure is logged but doesn't change the outcome), and the order
-   is persisted as `CANCELLED`. The client still gets a `201` with the order
-   body — `status: "CANCELLED"` is the signal, not an HTTP error — so check
-   the `status` field, not just the response code.
+1. Builds the `Order` + `OrderItem`s and persists it as `CREATED`.
+2. Publishes an `OrderCreatedEvent` (orderId, userId, totalAmount, items) to
+   the `order.created` Kafka topic, keyed by `orderId` (so all events for
+   one order land on the same partition and are processed in order).
+3. Returns the `CREATED` order immediately — this method no longer waits
+   for inventory/payment at all.
 
-This is deliberately **not** a saga with a dedicated compensation framework
-(that's Phase 5) — it's a straightforward try/rollback in the calling
-service, appropriate for synchronous orchestration.
+Downstream, asynchronously:
+4. **Inventory Service** consumes `order.created`, tries to reserve stock
+   for every line item (all-or-nothing — see its own README), and publishes
+   either `inventory.reserved` or `inventory.failed`.
+5. **Payment Service** consumes `inventory.reserved`, charges the order
+   total, and publishes either `payment.successful` or `payment.failed`.
+6. **This service** listens for all three possible outcomes
+   (`inventory.failed`, `payment.successful`, `payment.failed`) via
+   `event/OrderEventListener.java` and updates the order:
+   - `inventory.failed` or `payment.failed` → `OrderService.markCancelled()`
+   - `payment.successful` → `OrderService.markConfirmed()`
+7. **Notification Service** independently consumes the same three outcome
+   topics and creates a notification record for the user — it does not wait
+   for or depend on Order Service's own listener.
 
-## Resilience (Resilience4j)
-Both Feign clients (`inventory`, `payment` instance names in
-`application.yml`) have:
-- **Timeouts**: Feign `connectTimeout: 2000ms`, `readTimeout: 3000ms`
-- **Retry**: up to 3 attempts, 300ms wait, retries on `IOException` /
-  `feign.RetryableException` (i.e., network/timeout failures — not on 4xx
-  business errors like insufficient stock, which fail fast)
-- **Circuit breaker**: opens after 50% failure rate over a 10-call sliding
-  window, stays open 10s, then allows 3 trial calls (half-open)
+This is deliberately **not yet a formal saga** with defined compensating
+transactions per step (that's Phase 5) — Phase 3's scope is just "convert
+the chain to producer/consumer," which is what this is: a straight-line
+async pipeline, not a saga with a coordinator or compensation graph.
 
-Check live state via actuator: `GET /actuator/health` (shows circuit breaker
-state per instance) or `GET /actuator/circuitbreakers` /
-`GET /actuator/retries`.
+## Kafka topics this service produces/consumes
+| Topic | Direction | Payload | Consumer group (this service) |
+|---|---|---|---|
+| `order.created` | produces | `OrderCreatedEvent` | – (n/a, this service produces it) |
+| `inventory.failed` | consumes | `InventoryFailedEvent` | `order-service` |
+| `payment.successful` | consumes | `PaymentSuccessfulEvent` | `order-service` |
+| `payment.failed` | consumes | `PaymentFailedEvent` | `order-service` |
+
+All event classes live in `event/` and are duplicated per service (not
+shared) — see [[ARCHITECTURE.md]]'s note on why, same loose-coupling rule as
+the DTOs in earlier phases. JSON deserialization is configured with
+`spring.json.use.type.headers: false` and a per-listener
+`spring.json.value.default.type` override, so each service deserializes
+into its own local copy of the event class regardless of which package the
+producing service used.
 
 ## How other services find this service
 Still no service registry (Eureka/Consul) — that remains out of scope.
-Discovery is static config, now in two places:
-- `application.yml`'s `services.inventory.url` / `services.payment.url`
-  properties, consumed by the `@FeignClient(url = "${...}")` clients in
-  `client/InventoryClient.java` and `client/PaymentClient.java`.
+Discovery is now entirely via Kafka topic names (plain string constants in
+each service's own `event/KafkaTopics.java`) plus the shared broker address
+(`spring.kafka.bootstrap-servers: localhost:9092` in every service's
+`application.yml`) — there is no longer any hardcoded service-to-service
+URL anywhere in this service (Phase 2's `services.inventory.url` /
+`services.payment.url` properties are gone).
 - External clients still reach this service through the **API Gateway**
   (port `8080`), which routes `Path=/api/orders/**` to `http://localhost:8084`.
+  The gateway itself is unaffected by this phase — it's still synchronous
+  REST for client-facing traffic.
 
 ## Communication style
-Synchronous REST/JSON, now including **service-to-service** calls (Order →
-Inventory, Order → Payment) via OpenFeign, in addition to client-to-service
-calls through the gateway. No Kafka producer/consumer yet — that's Phase 3.
+- **Client → this service**: synchronous REST/JSON, via the gateway or
+  directly on port `8084`, unchanged from Phase 1/2.
+- **This service ↔ other services**: fully asynchronous, event-driven via
+  Kafka. No more direct HTTP calls to Inventory or Payment Service.

@@ -1,6 +1,7 @@
 # Port this service listens on. The API Gateway routes /api/payments/**
-# here, and order-service's PaymentClient (Feign) calls this port directly
-# for POST /api/payments to charge an order (Phase 2).
+# here. As of Phase 3, charging is triggered by a Kafka event
+# (inventory.reserved) rather than a direct HTTP call from order-service —
+# the REST endpoints still exist for manual testing/CRUD via Postman.
 server:
   port: 8085
 
@@ -25,6 +26,20 @@ spring:
     # Logs every generated SQL statement to the console — useful while
     # developing, noisy in production.
     show-sql: true
+  kafka:
+    bootstrap-servers: localhost:9092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+    consumer:
+      group-id: payment-service
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: com.ecommerce.payment.event
+        spring.json.value.default.type: com.ecommerce.payment.event.InventoryReservedEvent
+        spring.json.use.type.headers: false
+      auto-offset-reset: earliest
 
 management:
   endpoints:

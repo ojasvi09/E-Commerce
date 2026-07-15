@@ -1,4 +1,7 @@
-# Port this service listens on. The API Gateway routes /api/notifications/** here.
+# Port this service listens on. The API Gateway routes /api/notifications/**
+# here. As of Phase 3, notification records are created automatically by
+# Kafka listeners reacting to payment.successful/payment.failed/
+# inventory.failed — the REST endpoints still exist for manual testing/CRUD.
 server:
   port: 8086
 
@@ -23,6 +26,22 @@ spring:
     # Logs every generated SQL statement to the console — useful while
     # developing, noisy in production.
     show-sql: true
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      # Notification Service never produces events, only consumes — no producer
+      # block needed here, unlike the other 3 services in the chain.
+      group-id: notification-service
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: com.ecommerce.notification.event
+        spring.json.use.type.headers: false
+        # No single spring.json.value.default.type here (unlike inventory/payment) —
+        # this service listens to 3 different topics/event types, so each
+        # @KafkaListener in OrderOutcomeEventListener overrides this per-listener
+        # via its own `properties` attribute instead.
+      auto-offset-reset: earliest
 
 management:
   endpoints:
