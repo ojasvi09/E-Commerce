@@ -7,7 +7,19 @@ actually send email/SMS in Phase 1 — it only persists the notification
 record and its status; real delivery integration is a later-phase concern.
 
 ## Current phase status
-**Phase 4** (Event-Driven Workflow): this service no longer listens to raw
+**Phase 7** (Retry & Dead Letter Queue) adds
+`config/KafkaErrorHandlingConfig.java` (this service's first `config/`
+class — it produces no topics of its own, only consumes): its single
+`@KafkaListener` now retries a failing message up to 3 total attempts (1s
+then 2s backoff) before it's routed to `notification.requested.DLT`
+instead of retrying forever. The consumer's `value-deserializer` in
+`application.yml` is now `ErrorHandlingDeserializer` (wrapping the real
+`JsonDeserializer`) — see order-service's README or [[ARCHITECTURE.md]]
+for why a plain `JsonDeserializer` here would let a malformed message
+cause an unbounded tight loop that bypasses this retry/DLQ machinery
+entirely.
+
+Phase 4 (Event-Driven Workflow): this service no longer listens to raw
 domain events directly. Instead, every producing service (Inventory,
 Payment) builds its own user-facing message and publishes a single
 `NotificationRequestedEvent` to `notification.requested` — this service

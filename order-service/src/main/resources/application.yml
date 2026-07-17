@@ -38,8 +38,20 @@ spring:
       # "explicit consumer groups" in the phase 3 goal refers to.
       group-id: order-service
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      # Phase 7: wrapped in ErrorHandlingDeserializer instead of using JsonDeserializer
+      # directly. A malformed/unparseable message throws inside KafkaConsumer.poll()
+      # itself when JsonDeserializer is used directly — that's BEFORE the listener is
+      # ever invoked, so DefaultErrorHandler (config/KafkaErrorHandlingConfig.java) never
+      # sees it and can't route it to the DLQ; Kafka just keeps re-polling the same
+      # unparseable record forever (found live during Phase 7 testing — a tight loop with
+      # no backoff at all, worse than the retry-forever behavior Phase 7 exists to fix).
+      # ErrorHandlingDeserializer catches the delegate's parse failure and hands it to the
+      # listener container's error handling instead, where it surfaces as a
+      # DeserializationException that DefaultErrorHandler already classifies as
+      # non-retryable — straight to the DLQ, no retries wasted on bytes that can never parse.
+      value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
       properties:
+        spring.deserializer.value.delegate.class: org.springframework.kafka.support.serializer.JsonDeserializer
         spring.json.trusted.packages: com.ecommerce.order.event
         # Don't rely on the producer's __TypeId__ header (which would point at the
         # PRODUCING service's package, e.g. com.ecommerce.payment.event.PaymentSuccessfulEvent

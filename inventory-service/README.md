@@ -8,7 +8,17 @@ coupled from Product Service per `plan.md`'s "duplicate DTOs, don't share
 domain models" rule.
 
 ## Current phase status
-**Phase 6** (Transactional Outbox): `InventoryEventProducer` no longer calls
+**Phase 7** (Retry & Dead Letter Queue) adds
+`config/KafkaErrorHandlingConfig.java`: every `@KafkaListener` here now
+retries a failing message up to 3 total attempts (1s then 2s backoff)
+before it's routed to `<topic>.DLT` instead of retrying forever. The
+consumer's `value-deserializer` in `application.yml` is now
+`ErrorHandlingDeserializer` (wrapping the real `JsonDeserializer`) — see
+order-service's README or [[ARCHITECTURE.md]] for why a plain
+`JsonDeserializer` here would let a malformed message cause an unbounded
+tight loop that bypasses this retry/DLQ machinery entirely.
+
+Phase 6 (Transactional Outbox): `InventoryEventProducer` no longer calls
 Kafka directly — it writes to a new `outbox_events` table
 (`entity/OutboxEvent.java`) instead, published later by a `@Scheduled`
 `event/OutboxPoller.java`. The reserve-then-publish-success path was moved

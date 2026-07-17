@@ -9,7 +9,20 @@ time (so historical orders aren't affected by later product price changes).
 all items.
 
 ## Current phase status
-**Phase 6** (Transactional Outbox) replaces this service's direct
+**Phase 7** (Retry & Dead Letter Queue) adds
+`config/KafkaErrorHandlingConfig.java`: every `@KafkaListener` here now
+retries a failing message up to 3 total attempts (1s then 2s backoff)
+before it's routed to `<topic>.DLT` instead of retrying forever. The
+consumer's `value-deserializer` in `application.yml` is now
+`ErrorHandlingDeserializer` (wrapping the real `JsonDeserializer`) rather
+than `JsonDeserializer` directly — a malformed message on a plain
+`JsonDeserializer` throws inside `KafkaConsumer.poll()` itself, before this
+retry/DLQ machinery ever runs, and was found live to cause an unbounded
+tight loop (no backoff, never stops on its own). See
+[[ARCHITECTURE.md]]'s "Retry & Dead Letter Queue" section for the full
+story of both bugs found and fixed this phase.
+
+Phase 6 (Transactional Outbox) replaces this service's direct
 `KafkaTemplate.send()` calls with an `outbox_events` table
 (`entity/OutboxEvent.java`) written in the SAME transaction as the domain
 save that triggers the event, plus a `@Scheduled` `event/OutboxPoller.java`

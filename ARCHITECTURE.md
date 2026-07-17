@@ -5,17 +5,21 @@ This file is the top-level map of the system. It is meant to be
 system's structure and cross-cutting concerns evolve materially from phase
 to phase per `plan.md`/`project.txt`.
 
-> Last updated: **Phase 6** (Transactional Outbox — order-service,
-> inventory-service, and payment-service each write every Kafka event they
-> produce to their own `outbox_events` table in the SAME database
-> transaction as the domain write that caused it, instead of calling
-> `KafkaTemplate.send()` directly; a `@Scheduled` `OutboxPoller` in each
-> service reads unpublished rows and does the actual Kafka send). Phase 5
-> added order-service's `saga_state` table, queryable via
-> `GET /api/orders/{id}/saga`. Phase 4 added the full domain event set:
-> `OrderCancelled`, `ShipmentCreated`, `NotificationRequested`,
-> `RefundInitiated` on top of Phase 3's `OrderCreated`/`InventoryReserved`/
-> `InventoryFailed`/`PaymentSuccessful`/`PaymentFailed`.
+> Last updated: **Phase 7** (Retry & Dead Letter Queue — every
+> `@KafkaListener` across all 4 consumer services now retries a failing
+> message up to 3 total attempts with exponential backoff, then routes it to
+> a `<topic>.DLT` topic instead of retrying forever; deserialization
+> failures skip straight to the DLQ). Phase 6 added the transactional
+> outbox: order-service, inventory-service, and payment-service each write
+> every Kafka event they produce to their own `outbox_events` table in the
+> SAME database transaction as the domain write that caused it, instead of
+> calling `KafkaTemplate.send()` directly, with a `@Scheduled` `OutboxPoller`
+> in each service doing the actual send. Phase 5 added order-service's
+> `saga_state` table, queryable via `GET /api/orders/{id}/saga`. Phase 4
+> added the full domain event set: `OrderCancelled`, `ShipmentCreated`,
+> `NotificationRequested`, `RefundInitiated` on top of Phase 3's
+> `OrderCreated`/`InventoryReserved`/`InventoryFailed`/`PaymentSuccessful`/
+> `PaymentFailed`.
 > See each service's own `README.md` for full detail — this file only
 > summarizes and cross-links.
 
@@ -157,6 +161,68 @@ no surrounding transaction at all, so each failure-path
 `eventProducer.publish*()` call commits independently, regardless of how
 the try block's transaction resolved.
 
+## Retry & Dead Letter Queue (Phase 7)
+
+Before this phase, an uncaught exception in any `@KafkaListener` (something
+genuinely unexpected — not a modeled business failure like "insufficient
+stock," which already has its own `*Failed` event path) caused Spring
+Kafka's default behavior: retry the same message forever, immediately, with
+no backoff, blocking every later message on that partition indefinitely.
+Phase 7 replaces that with a bounded retry-then-dead-letter policy, added
+identically to every consumer service (order-service, inventory-service,
+payment-service, notification-service):
+
+1. **`config/KafkaErrorHandlingConfig.java`** (new in each service) defines
+   a `DefaultErrorHandler` bean with an `ExponentialBackOff`: 1s initial
+   delay, ×2 multiplier, `setMaxAttempts(2)` — meaning 1 initial attempt +
+   2 retries = **3 total attempts**, roughly 1s then 2s apart. (Spring's
+   `BackOff#setMaxAttempts` counts *retries*, not total attempts — this
+   tripped us up during testing: `setMaxAttempts(3)` actually produced 4
+   total attempts, not 3. Confirmed live and corrected before this phase's
+   commit.) Once attempts are exhausted, a `DeadLetterPublishingRecoverer`
+   (constructed with the service's own `KafkaTemplate`) republishes the
+   message to `<originalTopic>.DLT` — Spring Kafka's default DLQ naming
+   convention — instead of retrying forever, so the consumer can move on to
+   the next message. Spring Boot's autoconfigured
+   `ConcurrentKafkaListenerContainerFactory` picks up this bean
+   automatically; no changes needed to any existing `@KafkaListener` method
+   or business logic.
+2. **Deserialization failures are classified as non-retryable**
+   (`errorHandler.addNotRetryableExceptions(SerializationException.class,
+   DeserializationException.class)`) — a malformed/unparseable message can
+   never succeed no matter how many times the same bytes are retried, so
+   those go straight to the DLQ without wasting the backoff delay.
+   Everything else (e.g. a transient DB error thrown from inside a
+   listener) still gets the full 3-attempt retry treatment.
+
+**A second real bug found and fixed during Phase 7 testing, more severe
+than the one above**: the non-retryable-exception classification only
+covers exceptions thrown *during listener invocation* — it has no effect on
+a malformed message when the consumer's value-deserializer is a plain
+`JsonDeserializer`, because that throws inside `KafkaConsumer.poll()`
+itself, *before* the listener or `DefaultErrorHandler` ever runs. Live
+testing confirmed this: injecting one malformed JSON message onto
+`payment.failed` caused order-service to re-poll and fail on the exact same
+record in a **tight, unbounded loop with no backoff at all** — worse than
+the very problem this phase exists to fix, and it doesn't stop on its own
+(had to be killed manually; over 34,000 failed attempts accumulated in
+under a minute). The fix: every service's `application.yml` now sets
+`spring.kafka.consumer.value-deserializer` to Spring Kafka's
+`ErrorHandlingDeserializer`, with the real `JsonDeserializer` configured as
+its delegate via `spring.deserializer.value.delegate.class`. This makes a
+deserialization failure surface as a normal
+`DeserializationException` *inside* the listener-container's error-handling
+path, where `DefaultErrorHandler` already classifies it as non-retryable
+and dead-letters it immediately — confirmed live: the previously-stuck
+poison message was consumed, dead-lettered, and the consumer's offset
+advanced past it on the very next restart, with zero retries and zero
+delay.
+
+**Scope note**: this phase only covers consumer-side (`@KafkaListener`)
+failures. The Phase 6 outbox poller's own retry loop (an unpublished row is
+retried every poll tick, indefinitely, with no cap) is a separate,
+producer-side concern and was deliberately left unchanged this phase.
+
 ## Kafka topics
 
 | Topic | Producer | Consumers | Payload |
@@ -228,11 +294,13 @@ Per `plan.md`/`project.txt`, later phases are expected to add:
   built this phase) — each service still decides its own compensating
   action independently; the `saga_state` table only records progress, it
   doesn't sequence or coordinate anything
-- Retry with backoff + dead-letter topics on consumers (Phase 7) — the
-  outbox poller added in Phase 6 already retries a failed Kafka *send*
-  indefinitely on each poll tick, but there's no backoff/DLQ for a
-  *consumer*-side failure (e.g. a listener that keeps throwing for a
-  structurally bad message)
+- A cap on the Phase 6 outbox poller's own retry loop — right now an
+  unpublished outbox row is retried every poll tick (500ms) indefinitely
+  with no limit, no backoff, and no dead-letter equivalent for a row that
+  can never successfully send (e.g. a permanently misconfigured topic).
+  Phase 7 deliberately scoped its retry/DLQ work to consumer-side
+  (`@KafkaListener`) failures only and left this producer-side case
+  unchanged — worth a future look if a real stuck-row problem shows up
 - Idempotency via a `processed_events` table per consumer (Phase 8) — right
   now, a redelivered message (e.g. after a consumer restart mid-processing)
   would be reprocessed with no de-duplication. This is a real gap already:
