@@ -7,7 +7,16 @@ actually send email/SMS in Phase 1 — it only persists the notification
 record and its status; real delivery integration is a later-phase concern.
 
 ## Current phase status
-**Phase 7** (Retry & Dead Letter Queue) adds
+**Phase 8** (Idempotency) adds a `processed_events` table
+(`entity/ProcessedEvent.java` + `repository/ProcessedEventRepository.java`)
+and a `UUID eventId` field on `NotificationRequestedEvent`.
+`NotificationService.createIfNotProcessed` checks
+`processedEventRepository.existsById(incomingEventId)` before creating a
+`Notification` row, so a redelivered/retried event can't send a duplicate
+notification to the user. See [[ARCHITECTURE.md]]'s "Idempotency" section
+for the full design.
+
+Phase 7 (Retry & Dead Letter Queue) adds
 `config/KafkaErrorHandlingConfig.java` (this service's first `config/`
 class — it produces no topics of its own, only consumes): its single
 `@KafkaListener` now retries a failing message up to 3 total attempts (1s

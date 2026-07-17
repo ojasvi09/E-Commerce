@@ -5,14 +5,20 @@ This file is the top-level map of the system. It is meant to be
 system's structure and cross-cutting concerns evolve materially from phase
 to phase per `plan.md`/`project.txt`.
 
-> Last updated: **Phase 7** (Retry & Dead Letter Queue — every
-> `@KafkaListener` across all 4 consumer services now retries a failing
-> message up to 3 total attempts with exponential backoff, then routes it to
-> a `<topic>.DLT` topic instead of retrying forever; deserialization
-> failures skip straight to the DLQ). Phase 6 added the transactional
-> outbox: order-service, inventory-service, and payment-service each write
-> every Kafka event they produce to their own `outbox_events` table in the
-> SAME database transaction as the domain write that caused it, instead of
+> Last updated: **Phase 8** (Idempotency — every event record now carries a
+> random `eventId` (UUID), and all 4 consumer services check their own
+> `processed_events` table before doing any mutating work, so a
+> redelivered/retried event — from Kafka consumer-group redelivery, Phase
+> 7's retries, or a Phase 6 outbox-poller double-send — is a safe no-op
+> instead of double-decrementing stock, double-charging a payment, or
+> sending a duplicate notification). Phase 7 added retry & DLQ: every
+> `@KafkaListener` across all 4 consumer services retries a failing message
+> up to 3 total attempts with exponential backoff, then routes it to a
+> `<topic>.DLT` topic instead of retrying forever; deserialization failures
+> skip straight to the DLQ. Phase 6 added the transactional outbox:
+> order-service, inventory-service, and payment-service each write every
+> Kafka event they produce to their own `outbox_events` table in the SAME
+> database transaction as the domain write that caused it, instead of
 > calling `KafkaTemplate.send()` directly, with a `@Scheduled` `OutboxPoller`
 > in each service doing the actual send. Phase 5 added order-service's
 > `saga_state` table, queryable via `GET /api/orders/{id}/saga`. Phase 4
@@ -223,6 +229,69 @@ failures. The Phase 6 outbox poller's own retry loop (an unpublished row is
 retried every poll tick, indefinitely, with no cap) is a separate,
 producer-side concern and was deliberately left unchanged this phase.
 
+## Idempotency (Phase 8)
+
+Before this phase, every consumer was genuinely non-idempotent: a
+redelivered `OrderCreatedEvent` would double-decrement stock, a redelivered
+`InventoryReservedEvent` would insert a second `Payment` row (double-charge),
+a redelivered `PaymentSuccessfulEvent` would create a duplicate `Shipment`
+row, and so on for every listener. This was a real, not theoretical, risk —
+Phase 7's retries mean a listener can now be invoked up to 3 times per
+message, and the Phase 6 outbox poller has its own independent
+redelivery path (a send can reach the broker but crash before the
+`publishedAt` row commits, causing the next poll tick to resend the same
+outbox row under a new Kafka offset).
+
+**How it works**: every event record across all three producer services
+(order-service, inventory-service, payment-service — `OrderCreatedEvent`,
+`OrderCancelledEvent`, `ShipmentCreatedEvent`, `InventoryReservedEvent`,
+`InventoryFailedEvent`, `PaymentSuccessfulEvent`, `PaymentFailedEvent`,
+`RefundInitiatedEvent`, `NotificationRequestedEvent`) now carries a random
+`UUID eventId`, generated once via `UUID.randomUUID()` at the call site
+that builds the event (e.g. `OrderService.create`,
+`InventoryService.reserveAllAndPublish`, `PaymentService.chargeAndPublish`).
+Since the outbox write is just `objectMapper.writeValueAsString(event)` on
+the whole record, the id flows into the JSON payload and onto the wire with
+no changes needed to the outbox table or `OutboxPoller` — consumers already
+deserialize purely from JSON shape, so the new field just appears.
+
+Each of the 4 consumer services has its own `processed_events` table
+(`entity/ProcessedEvent.java` + `repository/ProcessedEventRepository.java`,
+same pattern as `SagaState`/`OutboxEvent` — plain JPA entity, no migration
+tooling) keyed by `eventId` (not Kafka topic/partition/offset — deliberately,
+since a resent outbox row gets a *new* offset but the *same* eventId, so
+keying on eventId covers both the Kafka-redelivery case and the
+outbox-double-send case with one mechanism). Every mutating method that
+handles an incoming event now:
+1. Checks `processedEventRepository.existsById(incomingEventId)` first —
+   if already processed, logs and returns immediately, doing nothing.
+2. Does its normal work (stock reserve/release, payment charge, order
+   status update, notification create, refund publish) — unchanged from
+   Phases 4-7.
+3. Saves a `ProcessedEvent` row for `incomingEventId`, in the SAME
+   transaction as step 2, right before returning.
+
+This is deliberately **inline in each existing method**, not a generic
+`@Idempotent` annotation or AOP aspect — consistent with how the outbox and
+saga-state patterns were added in Phases 5-6 (explicit, hand-rolled code
+per call site rather than a new abstraction). The guarded methods:
+`InventoryService.reserveAllAndPublish`/`releaseAllForOrder`,
+`PaymentService.chargeAndPublish`, `OrderCancelledEventListener.onOrderCancelled`
+(payment-service, refund path — guarded inline since it has no domain
+mutation to house a service method around), `OrderService.markConfirmed`/
+`markCancelled`, `NotificationService.createIfNotProcessed`.
+
+Note the dedupe key each guard uses is always the *incoming* event's
+`eventId`, never a freshly-minted outgoing event's id (which is different
+on every call and would never repeat, making it useless as a dedupe key).
+
+Verified live: replaying the exact same `OrderCreatedEvent` JSON (same
+`eventId`) that inventory-service had already processed logged "Skipping
+already-processed OrderCreatedEvent" and left stock quantity completely
+unchanged — no double-decrement. Same confirmed for a redelivered
+`payment.failed` event against order-service (no duplicate
+`OrderCancelledEvent`/refund triggered a second time).
+
 ## Kafka topics
 
 | Topic | Producer | Consumers | Payload |
@@ -301,12 +370,6 @@ Per `plan.md`/`project.txt`, later phases are expected to add:
   Phase 7 deliberately scoped its retry/DLQ work to consumer-side
   (`@KafkaListener`) failures only and left this producer-side case
   unchanged — worth a future look if a real stuck-row problem shows up
-- Idempotency via a `processed_events` table per consumer (Phase 8) — right
-  now, a redelivered message (e.g. after a consumer restart mid-processing)
-  would be reprocessed with no de-duplication. This is a real gap already:
-  the manual `order.cancelled` compensating-action test during Phase 4
-  development showed a redelivery would double-release stock or
-  double-refund with no guard in place today
 - Spring Security / auth on the gateway and services (Phase 10)
 - Redis caching
 - Testcontainers-based integration tests

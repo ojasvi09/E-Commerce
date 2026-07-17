@@ -33,7 +33,8 @@ public class OrderEventListener {
         // reserveAll() already rolled back any partial reservation before publishing
         // this event, so there's nothing for inventory-service to release — don't
         // publish OrderCancelledEvent here (see OrderService.markCancelled javadoc).
-        orderService.markCancelled(event.orderId(), "Inventory reservation failed: " + event.reason(), false);
+        orderService.markCancelled(event.eventId(), "OrderEventListener.onInventoryFailed", event.orderId(),
+                "Inventory reservation failed: " + event.reason(), false);
     }
 
     @KafkaListener(
@@ -42,7 +43,7 @@ public class OrderEventListener {
             properties = "spring.json.value.default.type=com.ecommerce.order.event.PaymentSuccessfulEvent")
     public void onPaymentSuccessful(PaymentSuccessfulEvent event) {
         log.info("Received PaymentSuccessfulEvent for orderId {}", event.orderId());
-        orderService.markConfirmed(event.orderId());
+        orderService.markConfirmed(event.eventId(), event.orderId());
     }
 
     @KafkaListener(
@@ -53,6 +54,7 @@ public class OrderEventListener {
         log.info("Received PaymentFailedEvent for orderId {}: {}", event.orderId(), event.reason());
         // Inventory WAS reserved before payment was attempted — publish
         // OrderCancelledEvent so inventory-service releases it back.
-        orderService.markCancelled(event.orderId(), "Payment failed: " + event.reason(), true);
+        orderService.markCancelled(event.eventId(), "OrderEventListener.onPaymentFailed", event.orderId(),
+                "Payment failed: " + event.reason(), true);
     }
 }

@@ -7,7 +7,18 @@ payment. Does not process real payments in Phase 1 — status is set directly
 by the caller (no payment gateway integration yet).
 
 ## Current phase status
-**Phase 7** (Retry & Dead Letter Queue) adds
+**Phase 8** (Idempotency) adds a `processed_events` table
+(`entity/ProcessedEvent.java` + `repository/ProcessedEventRepository.java`)
+and a `UUID eventId` field on every event this service produces/consumes.
+`PaymentService.chargeAndPublish` and `OrderCancelledEventListener.onOrderCancelled`
+(the refund path) both check
+`processedEventRepository.existsById(incomingEventId)` — keyed on the
+incoming `InventoryReservedEvent`/`OrderCancelledEvent`'s own id — before
+doing any work, so a redelivered/retried event can't double-charge an
+order or publish a duplicate `RefundInitiatedEvent`. See
+[[ARCHITECTURE.md]]'s "Idempotency" section for the full design.
+
+Phase 7 (Retry & Dead Letter Queue) adds
 `config/KafkaErrorHandlingConfig.java`: every `@KafkaListener` here now
 retries a failing message up to 3 total attempts (1s then 2s backoff)
 before it's routed to `<topic>.DLT` instead of retrying forever. The

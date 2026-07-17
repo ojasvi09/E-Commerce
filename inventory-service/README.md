@@ -8,7 +8,19 @@ coupled from Product Service per `plan.md`'s "duplicate DTOs, don't share
 domain models" rule.
 
 ## Current phase status
-**Phase 7** (Retry & Dead Letter Queue) adds
+**Phase 8** (Idempotency) adds a `processed_events` table
+(`entity/ProcessedEvent.java` + `repository/ProcessedEventRepository.java`)
+and a `UUID eventId` field on every event this service produces/consumes.
+`InventoryService.reserveAllAndPublish`/`releaseAllForOrder` now check
+`processedEventRepository.existsById(incomingEventId)` — keyed on the
+*incoming* `OrderCreatedEvent`/`OrderCancelledEvent`'s own id, not the
+freshly-generated outgoing `InventoryReservedEvent`'s id — before touching
+stock at all, so a redelivered/retried order event can't double-decrement
+or double-release. Verified live: replaying the exact same
+`OrderCreatedEvent` JSON left stock quantity completely unchanged. See
+[[ARCHITECTURE.md]]'s "Idempotency" section for the full design.
+
+Phase 7 (Retry & Dead Letter Queue) adds
 `config/KafkaErrorHandlingConfig.java`: every `@KafkaListener` here now
 retries a failing message up to 3 total attempts (1s then 2s backoff)
 before it's routed to `<topic>.DLT` instead of retrying forever. The

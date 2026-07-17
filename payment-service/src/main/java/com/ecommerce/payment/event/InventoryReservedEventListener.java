@@ -1,6 +1,7 @@
 package com.ecommerce.payment.event;
 
 import com.ecommerce.payment.service.PaymentService;
+import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,15 +43,15 @@ public class InventoryReservedEventListener {
         log.info("Received InventoryReservedEvent for orderId {}, charging {}",
                 event.orderId(), event.totalAmount());
         try {
-            paymentService.chargeAndPublish(event.orderId(), event.userId(), event.totalAmount());
+            paymentService.chargeAndPublish(event.eventId(), event.orderId(), event.userId(), event.totalAmount());
             eventProducer.publishNotificationRequested(new NotificationRequestedEvent(
-                    event.orderId(), event.userId(),
+                    UUID.randomUUID(), event.orderId(), event.userId(),
                     "Your order #" + event.orderId() + " has been confirmed. Amount charged: " + event.totalAmount()));
         } catch (RuntimeException ex) {
             log.error("Payment failed for orderId {}", event.orderId(), ex);
-            eventProducer.publishFailed(new PaymentFailedEvent(event.orderId(), event.userId(), ex.getMessage()));
+            eventProducer.publishFailed(new PaymentFailedEvent(UUID.randomUUID(), event.orderId(), event.userId(), ex.getMessage()));
             eventProducer.publishNotificationRequested(new NotificationRequestedEvent(
-                    event.orderId(), event.userId(),
+                    UUID.randomUUID(), event.orderId(), event.userId(),
                     "Your order #" + event.orderId() + " was cancelled: payment failed (" + ex.getMessage() + ")"));
         }
     }

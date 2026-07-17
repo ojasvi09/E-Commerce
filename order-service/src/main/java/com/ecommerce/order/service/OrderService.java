@@ -8,6 +8,7 @@ import com.ecommerce.order.dto.SagaStateResponse;
 import com.ecommerce.order.entity.Order;
 import com.ecommerce.order.entity.OrderItem;
 import com.ecommerce.order.entity.OrderStatus;
+import com.ecommerce.order.entity.ProcessedEvent;
 import com.ecommerce.order.entity.SagaStep;
 import com.ecommerce.order.entity.Shipment;
 import com.ecommerce.order.event.OrderCancelledEvent;
@@ -16,9 +17,12 @@ import com.ecommerce.order.event.OrderEventProducer;
 import com.ecommerce.order.event.ShipmentCreatedEvent;
 import com.ecommerce.order.exception.OrderNotFoundException;
 import com.ecommerce.order.repository.OrderRepository;
+import com.ecommerce.order.repository.ProcessedEventRepository;
 import com.ecommerce.order.repository.ShipmentRepository;
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,6 +40,7 @@ public class OrderService {
     private final ShipmentRepository shipmentRepository;
     private final OrderEventProducer orderEventProducer;
     private final SagaStateService sagaStateService;
+    private final ProcessedEventRepository processedEventRepository;
 
     /**
      * Persists the order as CREATED and publishes OrderCreatedEvent, then returns
@@ -52,7 +57,7 @@ public class OrderService {
                 .map(i -> new OrderCreatedEvent.Item(i.productId(), i.quantity(), i.price()))
                 .toList();
         orderEventProducer.publishOrderCreated(
-                new OrderCreatedEvent(saved.getId(), saved.getUserId(), saved.getTotalAmount(), items));
+                new OrderCreatedEvent(UUID.randomUUID(), saved.getId(), saved.getUserId(), saved.getTotalAmount(), items));
         sagaStateService.start(saved.getId());
 
         return toResponse(saved);
@@ -65,7 +70,11 @@ public class OrderService {
      * 7-service list), so this lives here since Order Service already owns order
      * lifecycle state.
      */
-    public void markConfirmed(Long orderId) {
+    public void markConfirmed(UUID incomingEventId, Long orderId) {
+        if (processedEventRepository.existsById(incomingEventId)) {
+            log.info("Skipping already-processed PaymentSuccessfulEvent {}", incomingEventId);
+            return;
+        }
         Order order = getOrThrow(orderId);
         order.setStatus(OrderStatus.CONFIRMED);
         log.info("Order {} confirmed", orderId);
@@ -73,9 +82,15 @@ public class OrderService {
 
         Shipment shipment = shipmentRepository.save(Shipment.builder().orderId(orderId).build());
         orderEventProducer.publishShipmentCreated(
-                new ShipmentCreatedEvent(orderId, order.getUserId(), shipment.getId()));
+                new ShipmentCreatedEvent(UUID.randomUUID(), orderId, order.getUserId(), shipment.getId()));
         sagaStateService.advance(orderId, SagaStep.SHIPMENT_CREATED, null);
         sagaStateService.advance(orderId, SagaStep.COMPLETED, null);
+
+        processedEventRepository.save(ProcessedEvent.builder()
+                .eventId(incomingEventId)
+                .listenerName("OrderEventListener.onPaymentSuccessful")
+                .processedAt(Instant.now())
+                .build());
     }
 
     /**
@@ -87,7 +102,12 @@ public class OrderService {
      * to with a compensating release. Publishing it unconditionally would make
      * inventory-service release stock it never reserved for the inventory-failure case.
      */
-    public void markCancelled(Long orderId, String reason, boolean releaseInventory) {
+    public void markCancelled(UUID incomingEventId, String incomingListenerName, Long orderId, String reason,
+            boolean releaseInventory) {
+        if (processedEventRepository.existsById(incomingEventId)) {
+            log.info("Skipping already-processed event {}", incomingEventId);
+            return;
+        }
         Order order = getOrThrow(orderId);
         order.setStatus(OrderStatus.CANCELLED);
         log.info("Order {} cancelled: {}", orderId, reason);
@@ -103,9 +123,15 @@ public class OrderService {
                     .map(i -> new OrderCreatedEvent.Item(i.getProductId(), i.getQuantity(), i.getPrice()))
                     .toList();
             orderEventProducer.publishOrderCancelled(
-                    new OrderCancelledEvent(orderId, order.getUserId(), reason, items));
+                    new OrderCancelledEvent(UUID.randomUUID(), orderId, order.getUserId(), reason, items));
         }
         sagaStateService.advance(orderId, SagaStep.FAILED, reason);
+
+        processedEventRepository.save(ProcessedEvent.builder()
+                .eventId(incomingEventId)
+                .listenerName(incomingListenerName)
+                .processedAt(Instant.now())
+                .build());
     }
 
     private Order buildOrder(OrderRequest request) {

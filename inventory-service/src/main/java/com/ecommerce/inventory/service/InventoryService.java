@@ -4,6 +4,7 @@ import com.ecommerce.inventory.dto.InventoryRequest;
 import com.ecommerce.inventory.dto.InventoryResponse;
 import com.ecommerce.inventory.dto.StockChangeRequest;
 import com.ecommerce.inventory.entity.Inventory;
+import com.ecommerce.inventory.entity.ProcessedEvent;
 import com.ecommerce.inventory.event.InventoryEventProducer;
 import com.ecommerce.inventory.event.InventoryReservedEvent;
 import com.ecommerce.inventory.exception.InsufficientStockException;
@@ -11,9 +12,14 @@ import com.ecommerce.inventory.exception.InventoryAlreadyExistsException;
 import com.ecommerce.inventory.exception.InventoryNotFoundException;
 import com.ecommerce.inventory.exception.InventoryNotFoundForProductException;
 import com.ecommerce.inventory.repository.InventoryRepository;
+import com.ecommerce.inventory.repository.ProcessedEventRepository;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -22,8 +28,11 @@ import org.springframework.transaction.annotation.Transactional;
 @Transactional
 public class InventoryService {
 
+    private static final Logger log = LoggerFactory.getLogger(InventoryService.class);
+
     private final InventoryRepository inventoryRepository;
     private final InventoryEventProducer eventProducer;
+    private final ProcessedEventRepository processedEventRepository;
 
     public InventoryResponse create(InventoryRequest request) {
         if (inventoryRepository.existsByProductId(request.productId())) {
@@ -116,10 +125,49 @@ public class InventoryService {
      * the listener's javadoc for why that split matters (a shared @Transactional across
      * both branches would let reserveAll()'s failure poison the failure-outcome outbox
      * write too).
+     *
+     * <p>Phase 8 (idempotency): incomingEventId identifies the INCOMING OrderCreatedEvent
+     * (not the outgoing InventoryReservedEvent, which gets a fresh random id every call and
+     * would never repeat) — if this exact incoming event was already processed, skip the
+     * reservation and outbox publish entirely, so a redelivered/retried OrderCreatedEvent
+     * can't double-decrement stock. Returns true if the work actually ran, false if skipped.
      */
-    public void reserveAllAndPublish(List<StockChangeRequest> items, InventoryReservedEvent reservedEvent) {
+    public boolean reserveAllAndPublish(UUID incomingEventId, List<StockChangeRequest> items,
+            InventoryReservedEvent reservedEvent) {
+        if (processedEventRepository.existsById(incomingEventId)) {
+            log.info("Skipping already-processed OrderCreatedEvent {}", incomingEventId);
+            return false;
+        }
         reserveAll(items);
         eventProducer.publishReserved(reservedEvent);
+        processedEventRepository.save(ProcessedEvent.builder()
+                .eventId(incomingEventId)
+                .listenerName("OrderCreatedEventListener.onOrderCreated")
+                .processedAt(Instant.now())
+                .build());
+        return true;
+    }
+
+    /**
+     * Compensating release for a whole order (Phase 8, idempotency) — guards on the
+     * incoming OrderCancelledEvent's own id so a redelivered/retried cancellation can't
+     * double-release stock. See reserveAllAndPublish's javadoc for why the guard key is
+     * the incoming event's id, not anything derived per-item.
+     */
+    public boolean releaseAllForOrder(UUID incomingEventId, List<StockChangeRequest> items) {
+        if (processedEventRepository.existsById(incomingEventId)) {
+            log.info("Skipping already-processed OrderCancelledEvent {}", incomingEventId);
+            return false;
+        }
+        for (StockChangeRequest item : items) {
+            release(item);
+        }
+        processedEventRepository.save(ProcessedEvent.builder()
+                .eventId(incomingEventId)
+                .listenerName("OrderCreatedEventListener.onOrderCancelled")
+                .processedAt(Instant.now())
+                .build());
+        return true;
     }
 
     private Inventory getOrThrow(Long id) {

@@ -29,7 +29,7 @@ public class NotificationRequestedEventListener {
     public void onNotificationRequested(NotificationRequestedEvent event) {
         log.info("Received NotificationRequestedEvent for orderId {}, notifying userId {}",
                 event.orderId(), event.userId());
-        notificationService.create(new NotificationRequest(
+        notificationService.createIfNotProcessed(event.eventId(), new NotificationRequest(
                 event.userId(),
                 event.message(),
                 NotificationType.EMAIL,

@@ -3,6 +3,7 @@ package com.ecommerce.inventory.event;
 import com.ecommerce.inventory.dto.StockChangeRequest;
 import com.ecommerce.inventory.service.InventoryService;
 import java.util.List;
+import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -51,13 +52,13 @@ public class OrderCreatedEventListener {
                 .map(i -> new StockChangeRequest(i.productId(), i.quantity()))
                 .toList();
         try {
-            inventoryService.reserveAllAndPublish(items,
-                    new InventoryReservedEvent(event.orderId(), event.userId(), event.totalAmount()));
+            inventoryService.reserveAllAndPublish(event.eventId(), items,
+                    new InventoryReservedEvent(UUID.randomUUID(), event.orderId(), event.userId(), event.totalAmount()));
         } catch (RuntimeException ex) {
             log.error("Inventory reservation failed for orderId {}", event.orderId(), ex);
-            eventProducer.publishFailed(new InventoryFailedEvent(event.orderId(), event.userId(), ex.getMessage()));
+            eventProducer.publishFailed(new InventoryFailedEvent(UUID.randomUUID(), event.orderId(), event.userId(), ex.getMessage()));
             eventProducer.publishNotificationRequested(new NotificationRequestedEvent(
-                    event.orderId(), event.userId(),
+                    UUID.randomUUID(), event.orderId(), event.userId(),
                     "Your order #" + event.orderId() + " was cancelled: item(s) out of stock (" + ex.getMessage() + ")"));
         }
     }
@@ -80,8 +81,6 @@ public class OrderCreatedEventListener {
         List<StockChangeRequest> released = event.items().stream()
                 .map(i -> new StockChangeRequest(i.productId(), i.quantity()))
                 .toList();
-        for (StockChangeRequest item : released) {
-            inventoryService.release(item);
-        }
+        inventoryService.releaseAllForOrder(event.eventId(), released);
     }
 }

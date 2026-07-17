@@ -9,7 +9,18 @@ time (so historical orders aren't affected by later product price changes).
 all items.
 
 ## Current phase status
-**Phase 7** (Retry & Dead Letter Queue) adds
+**Phase 8** (Idempotency) adds a `processed_events` table
+(`entity/ProcessedEvent.java` + `repository/ProcessedEventRepository.java`)
+and a `UUID eventId` field on every event this service produces/consumes.
+`OrderService.markConfirmed`/`markCancelled` now check
+`processedEventRepository.existsById(incomingEventId)` before doing any
+work, so a redelivered `PaymentSuccessfulEvent`/`PaymentFailedEvent`/
+`InventoryFailedEvent` can't create a duplicate `Shipment` row or
+double-trigger the compensation path. See [[ARCHITECTURE.md]]'s
+"Idempotency" section for the full design and why the dedupe key is always
+the *incoming* event's id, never a freshly generated outgoing one.
+
+Phase 7 (Retry & Dead Letter Queue) adds
 `config/KafkaErrorHandlingConfig.java`: every `@KafkaListener` here now
 retries a failing message up to 3 total attempts (1s then 2s backoff)
 before it's routed to `<topic>.DLT` instead of retrying forever. The
