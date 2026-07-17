@@ -8,7 +8,23 @@ coupled from Product Service per `plan.md`'s "duplicate DTOs, don't share
 domain models" rule.
 
 ## Current phase status
-**Phase 8** (Idempotency) adds a `processed_events` table
+**Phase 9** (Ordering & Scaling) adds
+`config/KafkaRebalanceConfig.java`, a `ContainerCustomizer` bean that
+attaches a `ConsumerAwareRebalanceListener` to every `@KafkaListener`
+container here, logging partition ASSIGNED/REVOKED at INFO level. Also
+made `server.port` overridable via a `SERVER_PORT` env var so a second
+instance can run alongside the first (`SERVER_PORT=8093 mvn
+spring-boot:run`) without touching checked-in config. Both the ordering
+guarantee (every producer already keys by `orderId`) and the scaling
+behavior (Kafka splitting/reassigning this service's 6 partitions across
+however many instances are in the `inventory-service` consumer group) were
+already true before this phase — this phase's own code just makes
+rebalancing visible in the logs, and the live test that proved it. See
+[[ARCHITECTURE.md]]'s "Ordering & Scaling" section for the full write-up,
+including the two-instance rebalance observation and the 4-order
+correctness test.
+
+Phase 8 (Idempotency) adds a `processed_events` table
 (`entity/ProcessedEvent.java` + `repository/ProcessedEventRepository.java`)
 and a `UUID eventId` field on every event this service produces/consumes.
 `InventoryService.reserveAllAndPublish`/`releaseAllForOrder` now check

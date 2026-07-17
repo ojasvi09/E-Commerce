@@ -3,7 +3,10 @@
 # (order.created) rather than direct HTTP calls from order-service — the
 # REST endpoints still exist for manual testing/CRUD via Postman.
 server:
-  port: 8083
+  # Overridable via SERVER_PORT env var — used in Phase 9 to run a second
+  # instance (port 8093) in the same Kafka consumer group, to observe
+  # partition assignment/rebalancing across multiple instances.
+  port: ${SERVER_PORT:8083}
 
 spring:
   application:

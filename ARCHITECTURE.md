@@ -5,7 +5,14 @@ This file is the top-level map of the system. It is meant to be
 system's structure and cross-cutting concerns evolve materially from phase
 to phase per `plan.md`/`project.txt`.
 
-> Last updated: **Phase 8** (Idempotency — every event record now carries a
+> Last updated: **Phase 9** (Ordering & Scaling — every topic was already
+> keyed by `orderId` and already had 3 partitions since Phase 3/6, so this
+> phase mainly *proved* the ordering/scaling guarantees live: ran two
+> inventory-service instances in the same consumer group, watched Kafka
+> split partitions across them, watched partitions reassign back to the
+> survivor when one instance stopped, and confirmed real orders processed
+> exactly once each with no double-decrement regardless of which instance
+> handled them). Phase 8 added idempotency: every event record now carries a
 > random `eventId` (UUID), and all 4 consumer services check their own
 > `processed_events` table before doing any mutating work, so a
 > redelivered/retried event — from Kafka consumer-group redelivery, Phase
@@ -291,6 +298,69 @@ already-processed OrderCreatedEvent" and left stock quantity completely
 unchanged — no double-decrement. Same confirmed for a redelivered
 `payment.failed` event against order-service (no duplicate
 `OrderCancelledEvent`/refund triggered a second time).
+
+## Ordering & Scaling (Phase 9)
+
+`plan.md` asks for two things: (1) key messages by `orderId` for per-order
+ordering guarantees, (2) run multiple consumer instances per group and
+observe partition assignment/rebalancing. Both prerequisites turned out to
+already be in place from earlier phases, so this phase was mostly about
+**proving** the guarantees live rather than writing new domain code.
+
+**Ordering guarantee (already true since Phase 3/6, verified this phase)**:
+every producer (`OrderEventProducer`, `InventoryEventProducer`,
+`PaymentEventProducer`) calls `OutboxEventService.enqueue(topic, eventKey,
+event)` with `event.orderId().toString()` as the key, and `OutboxPoller`
+forwards that key unchanged to `kafkaTemplate.send(topic, key, value)`. Kafka
+hashes the key to deterministically choose a partition, so every event for a
+given `orderId` always lands on the same partition — and a single partition
+is always consumed strictly in order by whichever single consumer owns it.
+This means an `OrderCreated` and a later `OrderCancelled` for the same order
+can never be processed out of order, even under retries/rebalancing.
+Every topic (`order.created`, `order.cancelled`, `inventory.reserved`,
+`inventory.failed`, `payment.successful`, `payment.failed`,
+`refund.initiated`, `shipment.created`, `notification.requested`) is declared
+with 3 partitions via `TopicBuilder.name(...).partitions(3).replicas(1)` in
+each producing service's `config/KafkaTopicConfig.java` — nothing relies on
+Kafka's broker-level `auto.create.topics.enable` default of 1 partition.
+
+**Scaling test (new this phase)**: added
+`inventory-service/.../config/KafkaRebalanceConfig.java`, a
+`ContainerCustomizer` bean that attaches a `ConsumerAwareRebalanceListener`
+to every `@KafkaListener` container, logging `partitions ASSIGNED`/`partitions
+REVOKED` at INFO level — purely observational, doesn't change delivery
+semantics. Also made `server.port` overridable via a `SERVER_PORT` env var
+(`${SERVER_PORT:8083}` in `application.yml`) so a second instance can run
+alongside the first without touching checked-in config.
+
+Ran two `inventory-service` instances (port 8083 and 8093, `SERVER_PORT=8093
+mvn spring-boot:run`), same `inventorydb`, same consumer group
+(`inventory-service`). Live observations:
+- **Single instance startup**: one instance holds all 6 partitions across its
+  two listener containers (3× `order.created`, 3× `order.cancelled`).
+- **Second instance joins**: both listener containers on both instances see
+  `partitions REVOKED` then `partitions ASSIGNED` — Kafka splits the 3
+  partitions per topic roughly evenly: instance A ends up with 1 partition
+  per topic, instance B with 2 per topic (`RangeAssignor` default behavior
+  for 3 partitions over 2 consumers).
+- **Second instance stops**: both containers on the survivor see
+  `partitions REVOKED` then reassigned **all** partitions back — the
+  surviving instance ends up holding all 6 partitions again, exactly like
+  the single-instance starting state.
+- **Correctness under 2 live instances**: placed 4 real orders (ids 26-29)
+  through the full order → inventory → payment → notification chain while
+  both instances were running. All 4 reached `CONFIRMED`; stock for the
+  ordered product dropped by exactly 4 (91 from 95, one decrement per
+  order — no double-processing). Cross-checking each instance's logs showed
+  order 29 was handled by the instance owning that order's partition and
+  orders 26-28 by the other instance — each order processed exactly once, by
+  whichever instance happened to own its partition, confirming horizontal
+  scaling doesn't compromise the per-order guarantees from Phases 6-8.
+
+No new abstraction was needed for the ordering half (already correct), and
+the scaling half is Kafka's own consumer-group mechanism — this project adds
+no custom partition-assignment or leader-election logic, just observability
+into what Kafka is already doing.
 
 ## Kafka topics
 
